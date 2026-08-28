@@ -120,6 +120,35 @@ change list uses `--unchanged-line-format`, which is GNU diffutils and not
 busybox. Alpine works once diffutils and coreutils are added back, at which
 point the smaller base has been patched towards this one a package at a time.
 
+### What goes in each setting
+
+Every one can come from the config file or from the environment as
+`DEJIMA_GUARD_` plus the key in upper case. The environment wins, which is
+what makes a compose file workable — but a token belongs in the file, since
+`docker inspect` shows the environment and so does anything reading `/proc`.
+
+**The machine being watched.** Everything here describes the *devbox*, at the
+other end of the connection, not the machine the guard runs on.
+
+| Setting | What goes in it |
+| --- | --- |
+| `devbox_host` | The devbox's hostname or address, as this machine reaches it |
+| `devbox_user` | The account **on the devbox** to log in as. Not root, and no default — the devbox runbook builds a machine with no root password, so the guard connects as an ordinary account and elevates for two commands |
+| `ssh_key` | The private key **on this machine**. Its own, not a general-purpose administrative one |
+| `ssh_known_hosts` | Where the devbox's host key is remembered. Must persist — in a container, on the state volume |
+| `ssh_timeout` | Seconds to wait. The line between a slow devbox and a gone one |
+
+**Where alerts go.**
+
+| Setting | What goes in it |
+| --- | --- |
+| `ntfy_url` | The topic to publish to. **Its own**, not the one dejima pushes to — that URL lives on the devbox, so root there could drown it or forge an all-clear |
+| `ntfy_token` | Write access to that topic and nothing else. The reason the config file is `0640` |
+| `heartbeat_url` | GET after a cycle that completed clean. An Uptime Kuma push monitor |
+| `alert_command` | An alternative to ntfy: gets the title and body on stdin |
+
+`etc/config.example` carries the same reference with the reasoning attached.
+
 ### The happy path is ntfy and Uptime Kuma
 
 Both self-hosted, and if you run dejima's remote access you already have the
