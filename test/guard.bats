@@ -256,6 +256,28 @@ EOF
     [[ "$output" == *"must start with http"* ]]
 }
 
+@test "the example placeholder is refused rather than run" {
+    # So the shipped compose example cannot become a live config by being
+    # copied and forgotten. It would otherwise start, fail to resolve, and
+    # report a devbox unreachable that was never configured.
+    printf 'host = CHANGE-ME.example.invalid\n' > "$DEJIMA_GUARD_CONF"
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch check
+    [ "$status" -ne 0 ]
+    [[ "$output" == *placeholder* ]]
+}
+
+@test "the shipped compose example carries that placeholder" {
+    # If it ever carries a plausible-looking host instead, the refusal above
+    # stops protecting anything and this is the test that says so.
+    grep -q 'DEJIMA_GUARD_HOST: CHANGE-ME' "$REPO/docker-compose.example.yml"
+}
+
+@test "there is no committed docker-compose.yml to start by accident" {
+    # `docker compose up` in a fresh clone must have nothing to run.
+    [ ! -e "$REPO/docker-compose.yml" ]
+}
+
 @test "no host configured is refused, not silently skipped" {
     printf 'ntfy_url = https://ntfy.example.invalid/x\n' > "$DEJIMA_GUARD_CONF"
     stub_ssh "FILE aaa /etc/one" 0
