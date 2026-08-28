@@ -1,2 +1,4 @@
 secrets/
+docker-compose.yml
+docker-compose.override.yml
 *.swp

@@ -74,12 +74,20 @@ compromised machine records the compromise as normal and reports clean forever.
 ### Or as a container
 
 ```sh
-cp docker-compose.yml docker-compose.override.yml   # edit the four values
+cp docker-compose.example.yml docker-compose.yml    # then edit it
 mkdir -p secrets && ssh-keygen -t ed25519 -N '' -f secrets/guard_key
 printf 'ntfy_token = tk_...\n' > secrets/config
 chmod 600 secrets/guard_key secrets/config
 docker compose up -d
 ```
+
+**A copy, not an override.** `docker compose up` reads `docker-compose.yml` and
+`docker-compose.override.yml` together and merges them, so overriding the
+example leaves its values in play rather than replacing them. Your copy is
+gitignored, which is also where your host and your URLs belong.
+
+The example will not start as shipped: its host is a placeholder the guard
+refuses, so it cannot become a live config by being copied and forgotten.
 
 The public half of that key goes in the devbox's `authorized_keys`, restricted
 as `etc/config.example` shows.

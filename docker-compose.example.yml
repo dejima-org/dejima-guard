@@ -1,5 +1,16 @@
-# The guard, as one service. `docker compose up -d` after filling in the four
-# values below and putting a key in place - README.md has both.
+# The guard, as one service.
+#
+# AN EXAMPLE, not a compose file. Copy it to docker-compose.yml, edit it there,
+# and start that - the copy is gitignored so your host and your URLs do not end
+# up in a commit.
+#
+# Do not use it as an override. `docker compose up` reads docker-compose.yml
+# and docker-compose.override.yml together and merges them, so an override
+# leaves these example values in play rather than replacing them.
+#
+# As written it will not start: the host below is a placeholder the guard
+# refuses, so this can never become a live config by being copied and
+# forgotten.
 services:
   dejima-guard:
     build: .
@@ -8,7 +19,7 @@ services:
     restart: unless-stopped
 
     environment:
-      DEJIMA_GUARD_HOST: devbox.example.invalid
+      DEJIMA_GUARD_HOST: CHANGE-ME.example.invalid
       DEJIMA_GUARD_USER: root
       DEJIMA_GUARD_SSH_KEY: /run/secrets/guard_key
       DEJIMA_GUARD_NTFY_URL: https://ntfy.example.invalid/devbox-alerts

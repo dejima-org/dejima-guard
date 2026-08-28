@@ -176,7 +176,15 @@ summarise() {  # summarise DIFF_FILE
 # subshell rather than this program - so a missing host produced an empty
 # result and the cycle carried on as though the box had answered with nothing.
 require_config() {
-    [ -n "$(cfg host)" ] || die "no host in $CONF - nothing to watch"
+    local h
+    h=$(cfg host)
+    [ -n "$h" ] || die "no host in $CONF - nothing to watch"
+    # The placeholder the shipped example carries, refused so that example can
+    # never become a live config by being copied and forgotten. dejima's own
+    # nginx example takes the same approach for the same reason.
+    case "$h" in
+        CHANGE-ME*) die "host is still the example placeholder ($h) - edit your config" ;;
+    esac
     local u
     for u in ntfy_url heartbeat_url; do
         [ -n "$(cfg "$u")" ] && check_url "$u" "$(cfg "$u")"
