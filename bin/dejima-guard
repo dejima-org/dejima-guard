@@ -1,0 +1,288 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Brad Anderson
+#
+# Watches a devbox from a machine that is not the devbox.
+#
+# THE INVERSION IS THE WHOLE DESIGN. The watcher reaches in; the watched host
+# never reaches out. That falls out of the firewall the devbox already has -
+# inbound SSH from the admin subnet is permitted, so this needs no new rule -
+# and it buys three things at once:
+#
+#   - the baseline lives here, on a machine the devbox cannot reach. Root there
+#     can lie about the current state; it cannot alter what was recorded last
+#     week;
+#   - the alert leaves from here, so a compromised devbox cannot suppress it by
+#     staying quiet or drown it by shouting;
+#   - SILENCE BECOMES A SIGNAL. A push reporter that is switched off causes
+#     nothing to happen, forever. A pull that stops arriving is itself the
+#     alarm, and it is the only mechanism here a compromised box cannot defeat
+#     by doing nothing.
+#
+# It is not a service. No port, no daemon, no inbound anything: a timer runs
+# it, it makes a few outbound connections, writes a file and exits. That is why
+# it does not need a machine of its own, and why "another thing to harden" is
+# not the trade being made.
+#
+# WHAT IT HOLDS is the new concentration of privilege and is worth stating: an
+# SSH key to the devbox, and a token for whatever it alerts through. Neither
+# grants a shell on the hypervisor. The key should be its own, restricted by
+# command= in authorized_keys, rather than a general-purpose administrative one.
+
+set -euo pipefail
+
+PROG=${0##*/}
+CONF=${DEJIMA_GUARD_CONF:-/etc/dejima-guard/config}
+STATE_DIR=${DEJIMA_GUARD_STATE:-/var/lib/dejima-guard}
+
+say() { printf '%s\n' "$*" >&2; }
+die() { say "$PROG: $*"; exit 2; }
+
+# --- config -----------------------------------------------------------------
+#
+# Parsed, never sourced. This file names a host to SSH to and a URL to post to,
+# and sourcing it would make both of those arbitrary code from a file that has
+# no reason to be executable.
+cfg() {  # cfg KEY [DEFAULT]
+    local v=""
+    [ -r "$CONF" ] && v=$(sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$CONF" | tail -1)
+    [ -n "$v" ] || v="${2-}"
+    printf '%s\n' "$v"
+}
+
+# The same restriction dejima puts on its own notify URL, for the same reason:
+# curl reads a leading -K/path as an option that takes the request from a file,
+# so a value without an explicit scheme is refused rather than guessed at.
+check_url() {  # check_url NAME VALUE
+    case "$2" in
+        http://*|https://*) ;;
+        *) die "$1 must start with http:// or https:// - got '$2'" ;;
+    esac
+    case "$2" in
+        *[!A-Za-z0-9:/._~?=%@+-]*) die "$1 contains a character that is not allowed here" ;;
+    esac
+}
+
+# --- reaching the devbox ----------------------------------------------------
+
+ssh_devbox() {  # ssh_devbox COMMAND...
+    local host user key opts
+    host=$(cfg host)       ; [ -n "$host" ] || die "no host in $CONF"
+    user=$(cfg user root)
+    key=$(cfg ssh_key)
+    opts="-o BatchMode=yes -o ConnectTimeout=$(cfg ssh_timeout 10)"
+    # StrictHostKeyChecking left at the ssh default on purpose. Turning it off
+    # here would mean this program accepts a changed host key without comment -
+    # on the one connection whose whole point is noticing that something about
+    # that machine changed.
+    # shellcheck disable=SC2086
+    ssh $opts ${key:+-i "$key"} "$user@$host" "$@"
+}
+
+# --- alerting ---------------------------------------------------------------
+#
+# NOTHING THE DEVBOX CONTROLS REACHES THE PHONE. dejima draws this line for its
+# own pushes and states where the guarantee lives; the same rule applies one
+# layer out, for the same reason. A compromised devbox controls filenames, unit
+# names and process names - every string a naive alert body would interpolate -
+# and ntfy renders a URL in a body as something tappable.
+#
+# So a body is composed here, from a fixed vocabulary and counts. The detail
+# stays in the report on this machine. The push exists to say go and look.
+alert() {  # alert PRIORITY TITLE BODY
+    local url tok cmd
+    url=$(cfg ntfy_url)
+    cmd=$(cfg alert_command)
+
+    if [ -n "$cmd" ]; then
+        printf '%s\n%s\n' "$2" "$3" | $cmd
+        return 0
+    fi
+    [ -n "$url" ] || { say "no ntfy_url and no alert_command: alert not sent"; return 1; }
+    check_url ntfy_url "$url"
+    tok=$(cfg ntfy_token)
+    curl -fsS --max-time 15 \
+        ${tok:+-H "Authorization: Bearer $tok"} \
+        -H "Title: $2" -H "Priority: $1" -H "Tags: rotating_light" \
+        -d "$3" "$url" >/dev/null
+}
+
+# The dead-man's switch, and the only part of this a compromised devbox cannot
+# reach at all.
+#
+# Uptime Kuma's push monitor is the documented shape: it expects a ping on a
+# cadence and alerts when one does not arrive. So this pings only on a cycle
+# that completed - never in a failure path - and the absence of that ping is
+# what reports a watcher that has died, been switched off, or lost its network.
+#
+# Anything speaking the same "GET this URL to say you are alive" shape works
+# here. Only the one is documented, because a list of alternatives is a list
+# that goes stale.
+heartbeat() {
+    local url
+    url=$(cfg heartbeat_url)
+    [ -n "$url" ] || return 0
+    check_url heartbeat_url "$url"
+    curl -fsS --max-time 10 "$url" >/dev/null || say "heartbeat failed to send"
+}
+
+# --- the cycle ---------------------------------------------------------------
+
+BASE="$STATE_DIR/baseline"
+LAST="$STATE_DIR/last-report"
+
+# Categories rather than paths, because the body of an alert must carry nothing
+# the watched machine chose. A count of changed unit files is safe to send; the
+# name of one is not.
+summarise() {  # summarise DIFF_FILE
+    local f=$1 n_file n_unit n_port
+    n_file=$(grep -c '^[+-] FILE ' "$f" || true)
+    n_unit=$(grep -c '^[+-] UNIT ' "$f" || true)
+    n_port=$(grep -c '^[+-] PORT ' "$f" || true)
+    [ "$n_file" -gt 0 ] && printf '%s file(s)\n' "$n_file"
+    [ "$n_unit" -gt 0 ] && printf '%s systemd unit(s)\n' "$n_unit"
+    [ "$n_port" -gt 0 ] && printf '%s listening port(s)\n' "$n_port"
+    return 0
+}
+
+# Checked here rather than at the point of use.
+#
+# ssh_devbox runs inside a command substitution, and `exit` in there ends the
+# subshell rather than this program - so a missing host produced an empty
+# result and the cycle carried on as though the box had answered with nothing.
+require_config() {
+    [ -n "$(cfg host)" ] || die "no host in $CONF - nothing to watch"
+    local u
+    for u in ntfy_url heartbeat_url; do
+        [ -n "$(cfg "$u")" ] && check_url "$u" "$(cfg "$u")"
+    done
+    return 0
+}
+
+cmd_check() {
+    local rc=0 state now reach_rc reach_out changed=0 body=""
+    require_config
+    install -d -m 0750 "$STATE_DIR"
+    now=$(mktemp) || die "no temp space"
+    # shellcheck disable=SC2064
+    trap "rm -f '$now' '$now.diff'" EXIT
+
+    # 1. Can it be reached at all?
+    #
+    # Deliberately the first question. A devbox that does not answer is the
+    # case a push reporter cannot report, and it is why this program pulls.
+    if ! state=$(ssh_devbox dejima-devbox-audit drift --state 2>/dev/null); then
+        alert max "devbox unreachable" \
+            "The watcher could not collect from the devbox. It may be down, off the network, or refusing this key." || true
+        say "FAIL: could not reach the devbox"
+        return 1
+    fi
+
+    # Tested on the string, not on the file. `printf '%s\n' ""` writes a
+    # newline, so a file holding nothing useful is still one byte long and
+    # passes -s - which had an audit that returned nothing read as a valid
+    # state, and on a first run recorded it as the baseline.
+    if [ -z "$state" ]; then
+        alert max "devbox returned nothing" \
+            "The audit ran and produced no state. That is not a clean box; it is a check that did not run." || true
+        say "FAIL: empty state"
+        return 1
+    fi
+    printf '%s\n' "$state" > "$now"
+
+    # 2. Containment, which the devbox can answer for itself.
+    reach_rc=0
+    reach_out=$(ssh_devbox dejima-devbox-audit reach 2>&1) || reach_rc=$?
+
+    # 3. Drift, which it cannot: the baseline is here.
+    if [ ! -f "$BASE" ]; then
+        cp "$now" "$BASE"
+        say "First run. Baseline recorded from the devbox as it is now."
+        say "  $(grep -c . "$BASE") entries. Take it on a box you believe is clean."
+        heartbeat
+        return 0
+    fi
+
+    diff --unchanged-line-format= --old-line-format='- %L' --new-line-format='+ %L' \
+        "$BASE" "$now" > "$now.diff" || true
+
+    if [ -s "$now.diff" ]; then
+        changed=1
+        body=$(summarise "$now.diff" | paste -sd', ' -)
+    fi
+
+    # 4. One alert per cycle, batching every finding.
+    #
+    # Not one per finding: an apt upgrade would otherwise arrive as forty
+    # pushes, and the next real one lands in a topic already muted.
+    if [ "$changed" = 1 ] && [ "$reach_rc" -ne 0 ]; then
+        alert max "devbox: changes and containment" \
+            "$body changed, and the containment check did not pass." || true
+        rc=1
+    elif [ "$changed" = 1 ]; then
+        alert high "devbox: unexplained changes" \
+            "$body changed since the last accepted state." || true
+        rc=1
+    elif [ "$reach_rc" -ne 0 ]; then
+        alert high "devbox: containment" \
+            "Nothing changed on the box, but the containment check did not pass." || true
+        rc=1
+    fi
+
+    {
+        printf '%s\n' "--- collected $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+        printf 'reach exit: %s\n%s\n\n' "$reach_rc" "$reach_out"
+        if [ "$changed" = 1 ]; then
+            printf 'changes against the baseline:\n'; cat "$now.diff"
+        else
+            printf 'no changes against the baseline\n'
+        fi
+    } > "$LAST"
+
+    if [ "$rc" -eq 0 ]; then
+        say "CLEAN: no changes, containment passed."
+        # Only on a cycle that completed and found nothing wrong. Pinging in a
+        # failure path would tell the dead-man's switch that all is well at the
+        # exact moment it is not.
+        heartbeat
+    else
+        say "ALERTED: see $LAST"
+    fi
+    return $rc
+}
+
+# Accepting the current state is a decision, so it is a separate command and
+# never something a check does on its own.
+cmd_accept() {
+    local state
+    require_config
+    install -d -m 0750 "$STATE_DIR"
+    state=$(ssh_devbox dejima-devbox-audit drift --state) || die "could not collect from the devbox"
+    [ -n "$state" ] || die "the devbox returned nothing - not accepting that as a baseline"
+    printf '%s\n' "$state" > "$BASE"
+    say "Baseline accepted: $(grep -c . "$BASE") entries in $BASE"
+    say "  Take it on a box you believe is clean. One taken on a compromised"
+    say "  machine records the compromise as normal and reports clean forever."
+}
+
+cmd_report() { [ -r "$LAST" ] && cat "$LAST" || say "no report yet - run $PROG check"; }
+
+usage() {
+    cat >&2 <<USAGE
+usage: $PROG [check|accept|report]
+
+  check    collect from the devbox, diff against the baseline held here,
+           alert on any change or on containment failing, and send the
+           heartbeat only if the cycle completed clean
+  accept   record the devbox's current state as the baseline
+  report   the last cycle's detail, which is deliberately not in the alert
+USAGE
+}
+
+case "${1:-check}" in
+    check)  cmd_check ;;
+    accept) cmd_accept ;;
+    report) cmd_report ;;
+    -h|--help) usage ;;
+    *) say "$PROG: unknown command: $1"; usage; exit 64 ;;
+esac

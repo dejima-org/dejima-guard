@@ -1,0 +1,20 @@
+[Unit]
+Description=Collect from the devbox and alert on what changed
+Documentation=https://gitbox.branderson.io/dejima/dejima-guard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=@@BIN_DIR@@/dejima-guard check
+
+# It listens on nothing and needs almost nothing. Whatever this machine is, it
+# is not this program's to put at risk.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/dejima-guard
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

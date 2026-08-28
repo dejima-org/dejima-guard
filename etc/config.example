@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Install at /etc/dejima-guard/config, mode 0640 root. It holds an ntfy token.
+#
+# Parsed, never sourced: key = value, and nothing here is executed. This file
+# names a host to SSH to and URLs to post to, and sourcing it would make all of
+# those arbitrary code from a file with no reason to be executable.
+
+# --- the devbox this watches ------------------------------------------------
+host = devbox.example.invalid
+user = root
+
+# Its own key, not a general-purpose administrative one, and restricted at the
+# devbox end. In that account's authorized_keys:
+#
+#   command="/usr/local/sbin/dejima-devbox-audit ${SSH_ORIGINAL_COMMAND##* }",\
+#   no-port-forwarding,no-agent-forwarding,no-pty ssh-ed25519 AAAA...
+#
+# What this program needs is two read-only subcommands. A key that can do only
+# those is a key worth less to whoever takes this machine - and this machine is
+# the one holding the evidence about the other one.
+ssh_key = /var/lib/dejima-guard/id_ed25519
+ssh_timeout = 10
+
+# --- where alerts go --------------------------------------------------------
+#
+# A DIFFERENT TOPIC FROM THE ONE dejima PUSHES TO, and this is the part that
+# matters rather than a tidiness preference.
+#
+# dejima's ntfy_url lives in ~/.config/dejima/config ON THE DEVBOX. Root there
+# reads it. So a compromised devbox can publish to that topic - drowning it
+# until you mute it, or forging an all-clear that never came from here.
+#
+# Give this its own topic, and give the devbox no credential for it. On a
+# self-hosted ntfy with access control that is a token per topic. Deny the
+# devbox READ on this one too: an intruder who can read the alerts about
+# themselves learns exactly what the monitoring noticed and what it missed,
+# which is worse than being able to write.
+ntfy_url = https://ntfy.example.invalid/devbox-alerts
+# ntfy_token = tk_...
+
+# --- the dead-man's switch --------------------------------------------------
+#
+# An Uptime Kuma push monitor. Kuma expects a ping on a cadence and alerts when
+# one does not arrive, which is exactly the shape wanted: this program pings
+# only on a cycle that completed and found nothing wrong, so silence from it is
+# itself the alarm.
+#
+# Without this, a watcher that dies is indistinguishable from a watcher with
+# nothing to report. That is the one failure this design cannot catch about
+# itself, and it is why the line is here rather than optional-by-omission.
+#
+# Anything speaking the same "GET this URL to say you are alive" shape works.
+heartbeat_url = https://kuma.example.invalid/api/push/abcdef
+
+# --- if you use something else ----------------------------------------------
+#
+# alert_command receives the title on the first line and the body on the second,
+# on stdin. Set it and ntfy_url is ignored.
+#
+# alert_command = /usr/local/bin/my-alerter

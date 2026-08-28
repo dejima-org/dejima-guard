@@ -1,0 +1,158 @@
+# dejima-guard
+
+Notices when a devbox changes, and tells you — from a machine that is not the
+devbox.
+
+A devbox has no upper bound on how long a compromise lasts. Its sister project,
+[dejima-ci-hardener](https://gitbox.branderson.io/dejima/dejima-ci-hardener),
+rebuilds a runner from a snapshot on a schedule, so anything that gets in has
+until the next rebuild. A devbox holds uncommitted work and is never rebuilt.
+Nothing reclaims it and nothing is looking.
+
+[dejima-devbox-hardener](https://gitbox.branderson.io/dejima/dejima-devbox-hardener)
+made the box report what changed. This is the part that reads those reports and
+wakes you up.
+
+**It does not run on the devbox.** That is the entire design, not a deployment
+detail — see [Why it pulls](#why-it-pulls).
+
+| | |
+| --- | --- |
+| [Setting it up](#setting-it-up) | **Start here.** One config file, one key, one timer |
+| [Why it pulls](#why-it-pulls) | The three things the inversion buys |
+| [What it does not do](#what-it-does-not-do) | Read this before relying on it |
+
+---
+
+## Before you use it
+
+**Early development. Not ready to be depended on.** Nothing here has been
+through outside review, an external audit, or adversarial testing by anyone but
+the person who wrote it. Every security property this describes is a claim
+awaiting scrutiny, not one that has survived it.
+
+**One maintainer, no support.** Nothing about this is promised: not a reply, not
+a fix, not a release.
+
+**It is a second opinion, not a boundary.** Nothing here prevents anything. It
+watches, and everything it can tell you is something that has already happened.
+
+## Setting it up
+
+It needs a machine that is always on and is not the devbox. A NAS, a home
+server, a Pi, an existing VM — anything already running. **Not a new VM**: this
+is not a service, and a machine of its own would be a poor trade for something
+whose whole job is to notice.
+
+```sh
+sudo install -m 0755 bin/dejima-guard /usr/local/sbin/dejima-guard
+sudo install -d -m 0750 /etc/dejima-guard /var/lib/dejima-guard
+sudo install -m 0640 etc/config.example /etc/dejima-guard/config
+sudoedit /etc/dejima-guard/config
+```
+
+Then a key of its own, restricted at the devbox end so it can run the two
+read-only subcommands and nothing else:
+
+```sh
+sudo ssh-keygen -t ed25519 -N '' -f /var/lib/dejima-guard/id_ed25519
+sudo cat /var/lib/dejima-guard/id_ed25519.pub
+```
+
+`etc/config.example` has the `authorized_keys` line to pair it with. Then:
+
+```sh
+sudo dejima-guard check     # first run records the baseline, alerts nothing
+sudo install -m 0644 systemd/dejima-guard.{service,timer} /etc/systemd/system/
+sudo sed -i 's|@@BIN_DIR@@|/usr/local/sbin|' /etc/systemd/system/dejima-guard.service
+sudo systemctl daemon-reload && sudo systemctl enable --now dejima-guard.timer
+```
+
+**Take the first baseline on a box you believe is clean.** One taken on a
+compromised machine records the compromise as normal and reports clean forever.
+
+### The happy path is ntfy and Uptime Kuma
+
+Both self-hosted, and if you run dejima's remote access you already have the
+first.
+
+**ntfy** carries the alerts. Give this its **own topic**, separate from the one
+dejima pushes to, and give the devbox no credential for it — `ntfy_url` lives in
+`~/.config/dejima/config` *on the devbox*, so root there can publish to that
+topic, drown it, or forge an all-clear. Deny the devbox read on the alert topic
+too: an intruder who can read the alerts about themselves learns what the
+monitoring noticed and what it missed.
+
+**Uptime Kuma** is the dead-man's switch. A push monitor expects a ping on a
+cadence and alerts when one does not arrive; this pings only on a cycle that
+completed and found nothing wrong. Without it, a watcher that dies looks exactly
+like a watcher with nothing to report.
+
+Anything else works through `alert_command` and a `heartbeat_url` of the same
+shape. Only the one path is documented, because a list of alternatives is a list
+that goes stale.
+
+## Why it pulls
+
+The watcher reaches in; the devbox never reaches out. That falls out of the
+firewall the devbox already has — inbound SSH from the admin subnet is
+permitted, so **no new firewall rule is needed** — and it buys three things:
+
+**The baseline lives here.** Root on the devbox can lie about the current state.
+It cannot alter what this machine recorded last week.
+
+**The alert leaves from here.** A compromised devbox cannot suppress it by going
+quiet, or drown it by shouting.
+
+**Silence becomes a signal.** This is the one that matters. A reporter running
+*on* the devbox, switched off by whoever took the box, causes nothing to happen —
+forever, with nothing to see. A collection that stops arriving is itself the
+alarm, and it is the only mechanism here that a compromised machine cannot
+defeat by doing nothing.
+
+It also bounds tampering: at a fifteen-minute cadence, an intruder has fifteen
+minutes to notice the monitoring and scrub, and the resulting gap is evidence.
+
+## What it does not do
+
+- **It does not prevent anything.** Everything it reports has already happened.
+- **It does not detect an intruder who anticipated it.** The devbox-side audit
+  can be lied to by root on the devbox. What this catches is a payload that did
+  not think to look — most of them, since the adversary in this threat model did
+  not choose your devbox.
+- **It does not watch CI runners.** Their scheduled rollback bounds dwell time,
+  so the need is weaker. The design is not tier-specific and extending it would
+  not be a rewrite.
+- **It does not watch itself.** That is what the heartbeat is for, and the thing
+  receiving it is outside this program.
+- **It sends no detail.** Alert bodies carry counts and categories, never a
+  filename or a unit name. A compromised devbox controls those strings, and
+  interpolating one into a push hands it a channel to your phone. The detail is
+  in `dejima-guard report`, on this machine.
+
+## Use
+
+```sh
+dejima-guard check      # what the timer runs
+dejima-guard report     # the last cycle's detail
+dejima-guard accept     # record the devbox's current state as the baseline
+```
+
+`accept` is a decision, which is why a check never makes it. After an `apt
+upgrade` on the devbox, read the report, and if the changes are yours, accept.
+
+## Tests
+
+```sh
+bats test/
+```
+
+They stub `ssh` and `curl` on `PATH` rather than replacing functions, because
+what is under test includes whether this program calls them at all — and the
+worst failures here are silent: alerting on nothing until the topic is muted,
+staying quiet when the box stops answering, and sending the heartbeat on a cycle
+that failed.
+
+## License
+
+GPL-3.0-or-later.

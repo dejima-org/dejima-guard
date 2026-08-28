@@ -1,0 +1,16 @@
+[Unit]
+Description=Watch the devbox on a cadence
+
+[Timer]
+# Fifteen minutes sets two things at once, and they pull the same way: it is
+# the longest an intruder has to notice the monitoring and scrub before a
+# collection, and the granularity of the dead-man's switch. Shorter costs
+# almost nothing; much longer and a compromise has room to tidy up.
+OnBootSec=5min
+OnUnitActiveSec=15min
+# Without this a fleet of watchers all collect on the same second.
+RandomizedDelaySec=60s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
