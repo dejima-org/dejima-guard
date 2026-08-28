@@ -2,27 +2,64 @@
 #
 # Install at /etc/dejima-guard/config, mode 0640 root. It holds an ntfy token.
 #
+# Every setting here can also come from the environment, as DEJIMA_GUARD_ plus
+# the key in upper case: devbox_host becomes DEJIMA_GUARD_DEVBOX_HOST. The
+# environment wins. That is for containers, where a compose file is where a
+# deployment already lives - but a token belongs here rather than there, since
+# `docker inspect` shows the environment and anything reading /proc does too.
+#
 # Parsed, never sourced: key = value, and nothing here is executed. This file
-# names a host to SSH to and URLs to post to, and sourcing it would make all of
-# those arbitrary code from a file with no reason to be executable.
+# names a host to connect to and URLs to post to, and sourcing it would make
+# every one of those arbitrary code from a file with no reason to be
+# executable.
 
-# --- the devbox this watches ------------------------------------------------
-host = devbox.example.invalid
-user = root
+# ===========================================================================
+# THE MACHINE BEING WATCHED
+# ===========================================================================
+#
+# Not the machine the guard runs on. Everything in this section describes the
+# devbox at the other end of the connection.
 
+# The devbox's hostname or address, as this machine reaches it.
+devbox_host = devbox.example.invalid
+
+# The account on the DEVBOX that the guard logs in as.
+#
+# NOT root, and there is no default. The devbox runbook builds a machine with
+# no root password and expects sudo from an ordinary account, so the guard
+# connects as that account and elevates for the two commands it runs - see
+# dejima-devbox-hardener, docs/building-a-devbox.md section 7, which has the
+# authorized_keys line and the sudoers rule together.
+devbox_user = brad
+
+# The private key, on THIS machine, that the guard connects with.
+#
 # Its own key, not a general-purpose administrative one, and restricted at the
-# devbox end. In that account's authorized_keys:
-#
-#   command="/usr/local/sbin/dejima-devbox-audit ${SSH_ORIGINAL_COMMAND##* }",\
-#   no-port-forwarding,no-agent-forwarding,no-pty ssh-ed25519 AAAA...
-#
-# What this program needs is two read-only subcommands. A key that can do only
-# those is a key worth less to whoever takes this machine - and this machine is
-# the one holding the evidence about the other one.
+# devbox end by a forced command. What this program needs is two read-only
+# subcommands; a key that can do only those is worth little to whoever
+# eventually takes this machine - and this machine holds the evidence about
+# the other one, which is a reason somebody might want it.
 ssh_key = /var/lib/dejima-guard/id_ed25519
+
+# Where the devbox's host key is remembered.
+#
+# Host key checking is left at ssh's default on purpose: this is the one
+# connection whose whole point is noticing that something about that machine
+# changed. So this file has to persist, which in a container means the state
+# volume rather than a home directory that is new every run - without it,
+# BatchMode turns the first connection into a failure and every collection
+# reports the devbox unreachable.
+ssh_known_hosts = /var/lib/dejima-guard/known_hosts
+
+# Seconds to wait for the connection. A devbox that is slow is not a devbox
+# that is gone, and this is the line between those two readings.
 ssh_timeout = 10
 
-# --- where alerts go --------------------------------------------------------
+# ===========================================================================
+# WHERE ALERTS GO
+# ===========================================================================
+
+# The ntfy topic to publish alerts to.
 #
 # A DIFFERENT TOPIC FROM THE ONE dejima PUSHES TO, and this is the part that
 # matters rather than a tidiness preference.
@@ -31,31 +68,40 @@ ssh_timeout = 10
 # reads it. So a compromised devbox can publish to that topic - drowning it
 # until you mute it, or forging an all-clear that never came from here.
 #
-# Give this its own topic, and give the devbox no credential for it. On a
+# Give this its own topic and give the devbox no credential for it. On a
 # self-hosted ntfy with access control that is a token per topic. Deny the
 # devbox READ on this one too: an intruder who can read the alerts about
 # themselves learns exactly what the monitoring noticed and what it missed,
 # which is worse than being able to write.
 ntfy_url = https://ntfy.example.invalid/devbox-alerts
+
+# A token with write access to that topic and nothing else. Optional on a
+# server without access control, and the reason this file is 0640.
 # ntfy_token = tk_...
 
-# --- the dead-man's switch --------------------------------------------------
+# ===========================================================================
+# THE DEAD-MAN'S SWITCH
+# ===========================================================================
+
+# A URL to GET after a cycle that completed and found nothing wrong.
 #
-# An Uptime Kuma push monitor. Kuma expects a ping on a cadence and alerts when
-# one does not arrive, which is exactly the shape wanted: this program pings
-# only on a cycle that completed and found nothing wrong, so silence from it is
-# itself the alarm.
+# An Uptime Kuma push monitor is the documented shape: it expects a ping on a
+# cadence and alerts when one does not arrive. That is exactly what is wanted
+# here, because this program is pinged only on a clean cycle - so silence from
+# it is itself the alarm.
 #
-# Without this, a watcher that dies is indistinguishable from a watcher with
+# Without this, a guard that dies is indistinguishable from a guard with
 # nothing to report. That is the one failure this design cannot catch about
-# itself, and it is why the line is here rather than optional-by-omission.
+# itself, which is why the line is here rather than left to be discovered.
 #
 # Anything speaking the same "GET this URL to say you are alive" shape works.
 heartbeat_url = https://kuma.example.invalid/api/push/abcdef
 
-# --- if you use something else ----------------------------------------------
+# ===========================================================================
+# IF YOU ALERT THROUGH SOMETHING ELSE
+# ===========================================================================
 #
-# alert_command receives the title on the first line and the body on the second,
-# on stdin. Set it and ntfy_url is ignored.
+# Receives the title on the first line and the body on the second, on stdin.
+# Set it and ntfy_url is ignored.
 #
 # alert_command = /usr/local/bin/my-alerter

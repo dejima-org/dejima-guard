@@ -24,7 +24,8 @@ setup() {
     export DEJIMA_GUARD_STATE="$BATS_TEST_TMPDIR/lib"
     export DEJIMA_GUARD_CONF="$BATS_TEST_TMPDIR/config"
     cat > "$DEJIMA_GUARD_CONF" <<EOF
-host = devbox.example.invalid
+devbox_host = devbox.example.invalid
+devbox_user = tester
 ntfy_url = https://ntfy.example.invalid/alerts
 heartbeat_url = https://kuma.example.invalid/api/push/abc
 EOF
@@ -201,8 +202,8 @@ FILE bbb /etc/evil-http-backdoor" 0
 
 @test "the environment overrides the config file" {
     stub_ssh "FILE aaa /etc/one" 0
-    printf 'host = wrong.example.invalid\n' > "$DEJIMA_GUARD_CONF"
-    DEJIMA_GUARD_HOST=devbox.example.invalid run_watch check
+    printf 'devbox_host = wrong.example.invalid\ndevbox_user = tester\n' > "$DEJIMA_GUARD_CONF"
+    DEJIMA_GUARD_DEVBOX_HOST=devbox.example.invalid run_watch check
     [ "$status" -eq 0 ]
     [ -f "$DEJIMA_GUARD_STATE/baseline" ]
 }
@@ -248,7 +249,8 @@ EOF
     # curl reads a leading -K/path as an option taking the request from a file.
     # dejima refuses these for the same reason and this follows it.
     stub_ssh "FILE aaa /etc/one" 0
-    printf 'host = devbox.example.invalid\nntfy_url = ntfy.example.invalid/x\n' > "$DEJIMA_GUARD_CONF"
+    printf 'devbox_host = devbox.example.invalid
+devbox_user = tester\nntfy_url = ntfy.example.invalid/x\n' > "$DEJIMA_GUARD_CONF"
     run_watch check
     [ -f "$DEJIMA_GUARD_STATE/baseline" ] || true
     stub_ssh "FILE zzz /etc/one" 0
@@ -260,7 +262,7 @@ EOF
     # So the shipped compose example cannot become a live config by being
     # copied and forgotten. It would otherwise start, fail to resolve, and
     # report a devbox unreachable that was never configured.
-    printf 'host = CHANGE-ME.example.invalid\n' > "$DEJIMA_GUARD_CONF"
+    printf 'devbox_host = CHANGE-ME.example.invalid\ndevbox_user = tester\n' > "$DEJIMA_GUARD_CONF"
     stub_ssh "FILE aaa /etc/one" 0
     run_watch check
     [ "$status" -ne 0 ]
@@ -270,7 +272,7 @@ EOF
 @test "the shipped compose example carries that placeholder" {
     # If it ever carries a plausible-looking host instead, the refusal above
     # stops protecting anything and this is the test that says so.
-    grep -q 'DEJIMA_GUARD_HOST: CHANGE-ME' "$REPO/docker-compose.example.yml"
+    grep -q 'DEJIMA_GUARD_DEVBOX_HOST: CHANGE-ME' "$REPO/docker-compose.example.yml"
 }
 
 @test "there is no committed docker-compose.yml to start by accident" {
@@ -278,10 +280,41 @@ EOF
     [ ! -e "$REPO/docker-compose.yml" ]
 }
 
+@test "no devbox_user is refused rather than defaulted to root" {
+    # It used to default to root, on a machine whose own runbook builds it
+    # with no root password and expects sudo from an ordinary account - so the
+    # default was wrong for every devbox built the documented way. Defaulting
+    # to nothing is not better: ssh would use the local username, which in a
+    # container is an account that does not exist over there.
+    printf 'devbox_host = devbox.example.invalid\n' > "$DEJIMA_GUARD_CONF"
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch check
+    [ "$status" -ne 0 ]
+    [[ "$output" == *devbox_user* ]]
+}
+
+@test "nothing in the config is named so that it could mean this machine" {
+    # DEJIMA_GUARD_HOST read as the host the guard runs on rather than the one
+    # it watches, which is the wrong end of the only connection this makes. A
+    # name that needs a comment to be read correctly is the wrong name.
+    ! grep -qE '^\s*(host|user)\s*=' "$REPO/etc/config.example" \
+        || { echo "config.example still has a bare host/user key"; false; }
+    ! grep -qE 'DEJIMA_GUARD_(HOST|USER):' "$REPO/docker-compose.example.yml" \
+        || { echo "the compose example still has an ambiguous variable"; false; }
+}
+
+@test "the two commands sent match what the devbox forced command permits" {
+    # dejima-devbox-hardener's dejima-guard-shell whitelists these two strings
+    # exactly. Change one here and the other side refuses it, which arrives
+    # back as a failed collection reported as the devbox being unreachable.
+    grep -q 'ssh_devbox dejima-devbox-audit drift --state' "$REPO/bin/dejima-guard"
+    grep -q 'ssh_devbox dejima-devbox-audit reach' "$REPO/bin/dejima-guard"
+}
+
 @test "no host configured is refused, not silently skipped" {
     printf 'ntfy_url = https://ntfy.example.invalid/x\n' > "$DEJIMA_GUARD_CONF"
     stub_ssh "FILE aaa /etc/one" 0
     run_watch check
     [ "$status" -ne 0 ]
-    [[ "$output" == *"no host"* ]]
+    [[ "$output" == *"no devbox_host"* ]]
 }

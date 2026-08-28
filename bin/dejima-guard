@@ -77,10 +77,14 @@ check_url() {  # check_url NAME VALUE
 
 # --- reaching the devbox ----------------------------------------------------
 
+# The two commands sent are matched EXACTLY by dejima-guard-shell, the forced
+# command on the devbox's end of this key. Change either string and the other
+# side refuses it - which arrives here as a failed collection, reported as the
+# devbox being unreachable. Both repositories, one contract.
 ssh_devbox() {  # ssh_devbox COMMAND...
     local host user key known opts
-    host=$(cfg host)       ; [ -n "$host" ] || die "no host in $CONF"
-    user=$(cfg user root)
+    host=$(cfg devbox_host) ; [ -n "$host" ] || die "no devbox_host in $CONF"
+    user=$(cfg devbox_user) ; [ -n "$user" ] || die "no devbox_user in $CONF"
     key=$(cfg ssh_key)
     known=$(cfg ssh_known_hosts)
     opts="-o BatchMode=yes -o ConnectTimeout=$(cfg ssh_timeout 10)"
@@ -177,8 +181,16 @@ summarise() {  # summarise DIFF_FILE
 # result and the cycle carried on as though the box had answered with nothing.
 require_config() {
     local h
-    h=$(cfg host)
-    [ -n "$h" ] || die "no host in $CONF - nothing to watch"
+    h=$(cfg devbox_host)
+    [ -n "$h" ] || die "no devbox_host in $CONF - nothing to watch"
+    # No default for the account, deliberately.
+    #
+    # It used to default to root, on a machine whose own runbook builds it with
+    # no root password and expects sudo from an ordinary account - so the
+    # default was wrong for every devbox built the documented way. Defaulting
+    # to nothing means ssh would use the local username instead, which in a
+    # container is an account that does not exist over there. Say which.
+    [ -n "$(cfg devbox_user)" ] || die "no devbox_user in $CONF - which account does the guard connect as?"
     # The placeholder the shipped example carries, refused so that example can
     # never become a live config by being copied and forgotten. dejima's own
     # nginx example takes the same approach for the same reason.

@@ -19,11 +19,47 @@ services:
     restart: unless-stopped
 
     environment:
-      DEJIMA_GUARD_HOST: CHANGE-ME.example.invalid
-      DEJIMA_GUARD_USER: root
+      # --- the machine being WATCHED, not the one this runs on ------------
+      #
+      # The devbox's hostname or address, as this container reaches it.
+      # Replace the placeholder: the guard refuses to start on CHANGE-ME.
+      DEJIMA_GUARD_DEVBOX_HOST: CHANGE-ME.example.invalid
+
+      # The account ON THE DEVBOX to log in as. Not root, and there is no
+      # default: the devbox runbook builds a machine with no root password
+      # and expects sudo from an ordinary account. The guard connects as that
+      # account and elevates for the two commands it runs.
+      DEJIMA_GUARD_DEVBOX_USER: your-devbox-account
+
+      # The private key, inside this container, to connect with. Mounted as a
+      # secret below rather than baked into the image.
       DEJIMA_GUARD_SSH_KEY: /run/secrets/guard_key
+
+      # Where the devbox's host key is remembered. On the state volume,
+      # because a container filesystem is new every run - and without it,
+      # every collection fails host-key verification and reports the devbox
+      # unreachable. Already set in the image; here so it is visible.
+      DEJIMA_GUARD_SSH_KNOWN_HOSTS: /var/lib/dejima-guard/known_hosts
+
+      # --- where alerts go -----------------------------------------------
+      #
+      # Its OWN ntfy topic, not the one dejima pushes to. That URL lives on
+      # the devbox, so root there can publish to it: a compromised box could
+      # drown the topic or forge an all-clear. The token for this one goes in
+      # the mounted config, not here.
       DEJIMA_GUARD_NTFY_URL: https://ntfy.example.invalid/devbox-alerts
+
+      # --- the dead-man's switch ------------------------------------------
+      #
+      # GET after a cycle that completed clean - an Uptime Kuma push monitor
+      # is the documented shape. Without it, a guard that dies looks exactly
+      # like a guard with nothing to report.
       DEJIMA_GUARD_HEARTBEAT_URL: https://kuma.example.invalid/api/push/abcdef
+
+      # --- this container --------------------------------------------------
+      #
+      # Seconds between collections. Sets the dead-man's switch granularity
+      # and how long an intruder has to notice the monitoring and scrub.
       DEJIMA_GUARD_INTERVAL: "900"
       # Anything secret goes in the config file rather than here. Everything
       # above is visible in `docker inspect` and to anything that can read
