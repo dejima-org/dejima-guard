@@ -43,9 +43,21 @@ die() { say "$PROG: $*"; exit 2; }
 # Parsed, never sourced. This file names a host to SSH to and a URL to post to,
 # and sourcing it would make both of those arbitrary code from a file that has
 # no reason to be executable.
+# Environment first, then the file, then the default.
+#
+# The environment is for containers, where a mounted config file is friction
+# and a compose file is where everything else about the deployment already
+# lives. DEJIMA_GUARD_NTFY_URL sets ntfy_url, and so on.
+#
+# Prefer the file for anything secret. An environment variable is visible in
+# `docker inspect` and to anything that can read /proc, which a token in a
+# 0640 file is not - so the token is the one value worth mounting even when
+# everything else comes from compose.
 cfg() {  # cfg KEY [DEFAULT]
-    local v=""
-    [ -r "$CONF" ] && v=$(sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$CONF" | tail -1)
+    local v="" env_name
+    env_name="DEJIMA_GUARD_$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
+    v=$(printf '%s' "${!env_name-}")
+    [ -n "$v" ] || { [ -r "$CONF" ] && v=$(sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$CONF" | tail -1); }
     [ -n "$v" ] || v="${2-}"
     printf '%s\n' "$v"
 }
@@ -66,15 +78,28 @@ check_url() {  # check_url NAME VALUE
 # --- reaching the devbox ----------------------------------------------------
 
 ssh_devbox() {  # ssh_devbox COMMAND...
-    local host user key opts
+    local host user key known opts
     host=$(cfg host)       ; [ -n "$host" ] || die "no host in $CONF"
     user=$(cfg user root)
     key=$(cfg ssh_key)
+    known=$(cfg ssh_known_hosts)
     opts="-o BatchMode=yes -o ConnectTimeout=$(cfg ssh_timeout 10)"
-    # StrictHostKeyChecking left at the ssh default on purpose. Turning it off
-    # here would mean this program accepts a changed host key without comment -
+
+    # StrictHostKeyChecking is left at the ssh default on purpose. Turning it
+    # off would mean this program accepts a changed host key without comment -
     # on the one connection whose whole point is noticing that something about
     # that machine changed.
+    #
+    # Which makes WHERE known_hosts lives a real setting rather than a detail.
+    # In a container the filesystem is new every run, so there is no
+    # known_hosts, and BatchMode turns the prompt into a failure: the first
+    # collection reports "could not reach the devbox" at max priority, and so
+    # does every one after it. A false alarm that never stops is worse than no
+    # alarm, because it is the one that gets muted.
+    #
+    # So it points at the state volume, where it persists and where a change to
+    # it is a change somebody has to explain.
+    [ -n "$known" ] && opts="$opts -o UserKnownHostsFile=$known"
     # shellcheck disable=SC2086
     ssh $opts ${key:+-i "$key"} "$user@$host" "$@"
 }
