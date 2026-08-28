@@ -197,6 +197,51 @@ FILE bbb /etc/evil-http-backdoor" 0
     [ ! -f "$DEJIMA_GUARD_STATE/baseline" ]
 }
 
+# --- configuration by environment, which is how a container gets it ---------
+
+@test "the environment overrides the config file" {
+    stub_ssh "FILE aaa /etc/one" 0
+    printf 'host = wrong.example.invalid\n' > "$DEJIMA_GUARD_CONF"
+    DEJIMA_GUARD_HOST=devbox.example.invalid run_watch check
+    [ "$status" -eq 0 ]
+    [ -f "$DEJIMA_GUARD_STATE/baseline" ]
+}
+
+@test "a config file alone still works, with no environment set" {
+    # The container path must not become the only path. A systemd host mounts
+    # nothing and sets nothing.
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch check
+    [ "$status" -eq 0 ]
+}
+
+@test "known_hosts is passed to ssh when configured" {
+    # Without it a container fails host-key verification on every run, and
+    # BatchMode turns that into "could not reach the devbox" at max priority -
+    # a false alarm that never stops, which is the kind that gets muted.
+    cat > "$STUB/ssh" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$DEJIMA_GUARD_STATE/ssh.log"
+case "$*" in *"drift --state"*) echo "FILE aaa /etc/one" ;; esac
+EOF
+    chmod +x "$STUB/ssh"
+    DEJIMA_GUARD_SSH_KNOWN_HOSTS=/var/lib/dejima-guard/known_hosts run_watch check
+    grep -q 'UserKnownHostsFile=/var/lib/dejima-guard/known_hosts' "$DEJIMA_GUARD_STATE/ssh.log"
+}
+
+@test "no known_hosts configured leaves ssh to its own default" {
+    # On a systemd host ~/.ssh/known_hosts is the right answer and naming one
+    # would override something already correct.
+    cat > "$STUB/ssh" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$DEJIMA_GUARD_STATE/ssh.log"
+case "$*" in *"drift --state"*) echo "FILE aaa /etc/one" ;; esac
+EOF
+    chmod +x "$STUB/ssh"
+    run_watch check
+    ! grep -q 'UserKnownHostsFile' "$DEJIMA_GUARD_STATE/ssh.log"
+}
+
 # --- config -----------------------------------------------------------------
 
 @test "a URL without a scheme is refused rather than guessed at" {

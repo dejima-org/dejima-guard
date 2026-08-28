@@ -18,7 +18,7 @@ detail — see [Why it pulls](#why-it-pulls).
 
 | | |
 | --- | --- |
-| [Setting it up](#setting-it-up) | **Start here.** One config file, one key, one timer |
+| [Setting it up](#setting-it-up) | **Start here.** One config file, one key, and either a timer or a container |
 | [Why it pulls](#why-it-pulls) | The three things the inversion buys |
 | [What it does not do](#what-it-does-not-do) | Read this before relying on it |
 
@@ -70,6 +70,47 @@ sudo systemctl daemon-reload && sudo systemctl enable --now dejima-guard.timer
 
 **Take the first baseline on a box you believe is clean.** One taken on a
 compromised machine records the compromise as normal and reports clean forever.
+
+### Or as a container
+
+```sh
+cp docker-compose.yml docker-compose.override.yml   # edit the four values
+mkdir -p secrets && ssh-keygen -t ed25519 -N '' -f secrets/guard_key
+printf 'ntfy_token = tk_...\n' > secrets/config
+chmod 600 secrets/guard_key secrets/config
+docker compose up -d
+```
+
+The public half of that key goes in the devbox's `authorized_keys`, restricted
+as `etc/config.example` shows.
+
+**It never publishes a port, and it never should.** What makes a container an
+acceptable home for a program holding an SSH key to the devbox is that nothing
+can connect to it. The compose file drops every capability, mounts the root
+filesystem read-only, and sets `no-new-privileges`.
+
+**The volume is not a cache.** It holds the baseline, the last report and
+`known_hosts`. Losing it is not a clean slate: a fresh baseline compares clean
+against everything for the rest of its life, and a fresh `known_hosts` fails
+host-key verification on every connection — which `BatchMode` turns into
+"could not reach the devbox", at max priority, forever. A false alarm that
+never stops is the kind that gets muted.
+
+**Config comes from the environment first, then the file.** Compose is where
+everything else about a deployment lives, so the environment is the ergonomic
+place for a hostname. It is the wrong place for a token: `docker inspect` shows
+it, and so does anything that can read `/proc`. Put secrets in the mounted
+config file, which is what `DEJIMA_GUARD_CONF` points at.
+
+**If you bind-mount a host directory instead of the named volume**, chown it to
+uid `10001` first. The image creates that user and the named volume inherits
+its ownership; a bind mount does not, and the guard cannot write its baseline
+to a directory owned by root.
+
+The image is Debian rather than Alpine deliberately: the diff that produces the
+change list uses `--unchanged-line-format`, which is GNU diffutils and not
+busybox. Alpine works once diffutils and coreutils are added back, at which
+point the smaller base has been patched towards this one a package at a time.
 
 ### The happy path is ntfy and Uptime Kuma
 

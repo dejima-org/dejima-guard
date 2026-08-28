@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Brad Anderson
+#
+# Runs the guard on an interval. For containers, where there is no systemd
+# timer to do it.
+#
+# A separate program rather than a flag, because dejima-guard is single-shot
+# and worth keeping that way: single-shot is what a timer wants, what a test
+# can drive, and what an operator can run by hand without wondering whether
+# they have started something. This wraps it; it does not become it.
+#
+# The loop still listens on nothing. That is the property that made a container
+# acceptable in the first place - not that the process is short-lived, but that
+# nothing can connect to it.
+#
+# A FAILED CYCLE MUST NOT STOP THE LOOP. The failure this whole design exists
+# to catch is a devbox that stops answering, and the guard reports that by
+# exiting non-zero. A loop that gave up there would go quiet at the exact
+# moment it had something to say - and the heartbeat, which only fires on a
+# clean cycle, would stop too, so the dead-man's switch would report the guard
+# as dead rather than the devbox as unreachable. Both true, one useful.
+
+set -uo pipefail
+
+INTERVAL=${DEJIMA_GUARD_INTERVAL:-900}
+GUARD=${DEJIMA_GUARD_BIN:-/usr/local/bin/dejima-guard}
+
+case "$INTERVAL" in
+    ''|*[!0-9]*) echo "dejima-guard-loop: interval must be seconds, got '$INTERVAL'" >&2; exit 64 ;;
+esac
+[ "$INTERVAL" -ge 60 ] || { echo "dejima-guard-loop: refusing an interval under 60s" >&2; exit 64; }
+
+# Terminate promptly on the signals a container runtime sends, rather than
+# after however much of the sleep is left.
+trap 'exit 0' TERM INT
+
+echo "dejima-guard-loop: every ${INTERVAL}s" >&2
+while :; do
+    "$GUARD" check || true
+    sleep "$INTERVAL" &
+    wait $!
+done
