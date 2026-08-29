@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Brad Anderson
 #
-# The ways a watcher can be wrong are worse than the ways a check can be, because
-# nobody is looking at a watcher. It runs from a timer and its output is an alert
+# The ways a guard can be wrong are worse than the ways a check can be, because
+# nobody is looking at a guard. It runs from a timer and its output is an alert
 # that either arrives or does not.
 #
 # Three of them are tested here and all three are silent failures:
@@ -97,7 +97,7 @@ heartbeats() { curl_log | grep -c 'kuma.example.invalid' || true; }
 
 @test "an empty state is a failure, not a clean box" {
     # A check that produced nothing has not found nothing. Treating the two the
-    # same is how a watcher reports all-clear on a box whose audit was removed.
+    # same is how a guard reports all-clear on a box whose audit was removed.
     stub_ssh "FILE aaa /etc/one" 0
     run_watch check
     stub_ssh "" 0
@@ -698,4 +698,17 @@ keyline() { awk '{print $1, $2}' "$BATS_TEST_TMPDIR/hk_$1.pub"; }
     stub_ssh "FILE /etc/passwd aaaa" 0
     run_watch check
     [[ "$output" != *"heartbeat_url"* ]]
+}
+
+@test "nothing user-facing calls this program the watcher" {
+    # It has a name. "The watcher" names no machine, reads as a role rather
+    # than a thing to run, and left alerts that identified neither end of the
+    # connection they were about.
+    #
+    # This file is excluded: the assertion above deliberately quotes the old
+    # wording, which is the only place it should still appear.
+    found=$(grep -rn -i 'the watcher' "$REPO/README.md" "$REPO/bin" "$REPO/etc" \
+                "$REPO/systemd" "$REPO/Dockerfile" "$REPO/docker-compose.example.yml" \
+            2>/dev/null || true)
+    [ -z "$found" ] || { echo "$found"; false; }
 }

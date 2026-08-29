@@ -4,7 +4,7 @@
 #
 # Watches a devbox from a machine that is not the devbox.
 #
-# THE INVERSION IS THE WHOLE DESIGN. The watcher reaches in; the watched host
+# THE INVERSION IS THE WHOLE DESIGN. dejima-guard reaches in; the watched host
 # never reaches out. That falls out of the firewall the devbox already has -
 # inbound SSH from the admin subnet is permitted, so this needs no new rule -
 # and it buys three things at once:
@@ -225,7 +225,7 @@ alert() {  # alert PRIORITY TITLE BODY
 # Uptime Kuma's push monitor is the documented shape: it expects a ping on a
 # cadence and alerts when one does not arrive. So this pings only on a cycle
 # that completed - never in a failure path - and the absence of that ping is
-# what reports a watcher that has died, been switched off, or lost its network.
+# what reports a guard that has died, been switched off, or lost its network.
 #
 # Anything speaking the same "GET this URL to say you are alive" shape works
 # here. Only the one is documented, because a list of alternatives is a list
