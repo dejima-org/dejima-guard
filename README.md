@@ -60,7 +60,9 @@ the person who wrote it. Every security property this describes is a claim
 awaiting scrutiny, not one that has survived it.
 
 **One maintainer, no support.** Nothing about this is promised: not a reply, not
-a fix, not a release.
+a fix, not a release. [SECURITY.md](SECURITY.md) has what this claims, what it
+holds, and where it is weaker than dejima — and is where to report a
+vulnerability rather than in a public issue.
 
 **It is a second opinion, not a boundary.** Nothing here prevents anything. It
 watches, and everything it can tell you is something that has already happened.

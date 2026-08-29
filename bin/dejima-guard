@@ -105,6 +105,23 @@ check_url() {  # check_url NAME VALUE
     [ -z "$bad" ] || die "$1 contains characters that cannot appear in a URL: $bad"
 }
 
+# A value that is about to be written into a curl config file.
+#
+# check_url already refuses a URL containing a quote or a backslash, which is
+# what would end the quoted value early and let the rest be read as further
+# options. A token goes through the same door and needs the same lock: curl
+# config syntax is not shell, but it is still a parser being handed a value
+# from a file.
+check_secret() {  # check_secret NAME VALUE
+    [ -n "$2" ] || return 0
+    case "$2" in
+        *[\"\\]*|*"'"*) die "$1 contains a quote or a backslash, which cannot be passed safely" ;;
+    esac
+    case "$2" in
+        *[[:space:]]*) die "$1 contains whitespace" ;;
+    esac
+}
+
 # --- reaching the devbox ----------------------------------------------------
 
 # The two commands sent are matched EXACTLY by dejima-guard-shell, the forced
@@ -227,8 +244,18 @@ alert() {  # alert PRIORITY TITLE BODY
     fi
     check_url ntfy_url "$url"
     tok=$(cfg ntfy_token)
-    if curl -fsS --max-time 15 \
-        ${tok:+-H "Authorization: Bearer $tok"} \
+    check_secret ntfy_token "$tok"
+
+    # THE TOKEN STAYS OUT OF argv. /proc/<pid>/cmdline is world-readable, so
+    # `-H "Authorization: Bearer $tok"` hands the token to every local user for
+    # the length of the call - and on the systemd path this runs as root on a
+    # machine that may have other people on it. curl reads options from a config
+    # on stdin instead, which no other process can see.
+    #
+    # The body and the title stay on the command line: they are counts and a
+    # hostname, and neither is a secret.
+    if { [ -n "$tok" ] && printf 'header = "Authorization: Bearer %s"\n' "$tok"; true; } \
+        | curl -fsS --max-time 15 -K - \
         -H "Title: $2" -H "Priority: $1" -H "Tags: rotating_light" \
         -d "$3" "$url" >/dev/null
     then
@@ -256,7 +283,10 @@ heartbeat() {
     url=$(cfg heartbeat_url)
     [ -n "$url" ] || return 0
     check_url heartbeat_url "$url"
-    curl -fsS --max-time 10 "$url" >/dev/null || say "heartbeat failed to send"
+    # Off argv for the same reason: an Uptime Kuma push URL carries its token in
+    # the path, so the URL is the credential.
+    printf 'url = "%s"\n' "$url" \
+        | curl -fsS --max-time 10 -K - >/dev/null || say "heartbeat failed to send"
 }
 
 # --- the cycle ---------------------------------------------------------------
