@@ -194,8 +194,8 @@ same treatment.
 **4. Record the host key and start it.**
 
 ```sh
-docker compose run --build --rm dejima-guard dejima-guard trust-host
-docker compose run --build --rm dejima-guard dejima-guard accept  # the baseline
+docker compose run --build --rm dejima-guard trust-host
+docker compose run --build --rm dejima-guard accept       # the baseline
 docker compose up --build -d
 docker compose exec dejima-guard dejima-guard test-alert
 ```
@@ -425,6 +425,44 @@ dejima-guard-install-key # put the guard's key on a devbox, restricted
 
 `accept` is a decision, which is why a check never makes it. After an `apt
 upgrade` on the devbox, read the report, and if the changes are yours, accept.
+
+### In a container, every one of those needs a prefix
+
+There is no `dejima-guard` on the host: it lives in the image, with the config
+and the state volume the commands need. Running the bare name on a container
+host either finds nothing or, if you also installed the host path, finds a
+second deployment with its own baseline.
+
+**While it is running**, which is the usual case:
+
+```sh
+docker compose exec dejima-guard dejima-guard report
+docker compose exec dejima-guard dejima-guard accept
+```
+
+**While it is not** (during setup, or after `docker compose down`):
+
+```sh
+docker compose run --rm dejima-guard accept
+```
+
+`exec` runs inside the container that is already there. `run` starts another one
+from the same image, with the same volume and secrets, and removes it after.
+Either works; `exec` is cheaper and is what to reach for once the thing is up.
+
+**The command is not repeated after `run`.** The image's entrypoint is already
+the guard, so `run --rm dejima-guard accept` is the whole of it. Naming the
+binary again passes it as an argument to itself.
+
+If the prefix gets tiresome, this belongs in your profile, pointed at wherever
+your compose file lives:
+
+```sh
+dejima-guard() {
+  docker compose -f /srv/dejima-guard/docker-compose.yml \
+    exec -T dejima-guard dejima-guard "$@"
+}
+```
 
 ## Tests
 

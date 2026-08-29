@@ -35,6 +35,21 @@ esac
 # after however much of the sleep is left.
 trap 'exit 0' TERM INT
 
+# ARGUMENTS MEAN "RUN THIS ONCE", because this is the image's entrypoint.
+#
+# `docker compose run SERVICE CMD` replaces the command and keeps the
+# entrypoint, so `run --rm dejima-guard dejima-guard trust-host` arrived here as
+# two arguments this script ignored, and it started looping instead. The
+# operator watching for a fingerprint got a check every fifteen minutes,
+# forever, in a container they had to interrupt. That was the documented setup.
+#
+# So: no arguments is the timer, arguments are one command. It also shortens the
+# form to `docker compose run --rm dejima-guard trust-host`, since the entrypoint
+# is already the guard.
+if [ "$#" -gt 0 ]; then
+    exec "$GUARD" "$@"
+fi
+
 echo "dejima-guard-loop: every ${INTERVAL}s" >&2
 while :; do
     "$GUARD" check || true
