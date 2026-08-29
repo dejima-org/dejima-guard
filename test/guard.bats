@@ -1146,3 +1146,104 @@ SSHEOF
     grep -q '^heartbeat_url' "$REPO/etc/config.example"
     grep -q 'heartbeat_url' "$REPO/README.md"
 }
+
+# --- what kind of change it was ------------------------------------------------
+#
+# Every finding used to arrive as one "unexplained changes" at high. A checksum
+# that moved because logrotate ran, a new listening port, and the audit binary
+# itself being replaced were the same push.
+
+@test "a change to the audit's own binary is its own alert, at max" {
+    # The sharpest one. If the collector changed, everything this guard has been
+    # told since is suspect, including the report saying so.
+    stub_ssh "FILE aaa /usr/local/sbin/dejima-devbox-audit" 0
+    run_watch accept
+    stub_ssh "FILE bbb /usr/local/sbin/dejima-devbox-audit" 0
+    run_watch check
+    [[ "$(curl_log)" == *"Priority: max"* ]]
+    [[ "$(curl_log)" == *"watched path changed"* ]]
+    [[ "$(curl_log)" == *"unverified"* ]]
+}
+
+@test "the forced command and the sudoers rule are watched the same way" {
+    # They are what makes the guard's access read-only, so a change to them is a
+    # change in what a stolen key is worth.
+    for path in /usr/local/sbin/dejima-guard-shell /etc/sudoers.d/dejima-guard; do
+        rm -rf "$DEJIMA_GUARD_STATE"; mkdir -p "$DEJIMA_GUARD_STATE"
+        stub_ssh "FILE aaa $path" 0
+        run_watch accept
+        stub_ssh "FILE bbb $path" 0
+        run_watch check
+        [[ "$(curl_log)" == *"watched path changed"* ]] || { echo "missed $path"; false; }
+    done
+}
+
+@test "an authorized_keys change is watched whichever home it is in" {
+    # Matched on the tail of the path, since the account name is the operator's
+    # and root's copy is a different directory again.
+    stub_ssh "FILE aaa /home/someone/.ssh/authorized_keys" 0
+    run_watch accept
+    stub_ssh "FILE bbb /home/someone/.ssh/authorized_keys" 0
+    run_watch check
+    [[ "$(curl_log)" == *"watched path changed"* ]]
+}
+
+@test "a new listening port alerts at max, not as an ordinary change" {
+    # A listener is a thing arranging to be reached. It is not a config edit.
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept
+    stub_ssh "FILE aaa /etc/one
+PORT tcp 0.0.0.0:4444" 0
+    run_watch check
+    [[ "$(curl_log)" == *"Priority: max"* ]]
+    [[ "$(curl_log)" == *"newly arranged to run or to be reached"* ]]
+}
+
+@test "a newly enabled unit alerts at max too" {
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept
+    stub_ssh "FILE aaa /etc/one
+UNIT backdoor.service" 0
+    run_watch check
+    [[ "$(curl_log)" == *"Priority: max"* ]]
+}
+
+@test "a port that went away is not a new listener" {
+    # Removal is drift worth reporting and is not the shape this escalates for.
+    stub_ssh "FILE aaa /etc/one
+PORT tcp 0.0.0.0:4444" 0
+    run_watch accept
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch check
+    [[ "$(curl_log)" == *"unexplained changes"* ]]
+    [[ "$(curl_log)" != *"newly arranged"* ]]
+}
+
+@test "an ordinary file change still reports as ordinary drift" {
+    # The escalations are worth nothing if everything escalates.
+    stub_ssh "FILE aaa /etc/logrotate.conf" 0
+    run_watch accept
+    stub_ssh "FILE bbb /etc/logrotate.conf" 0
+    run_watch check
+    [[ "$(curl_log)" == *"unexplained changes"* ]]
+    [[ "$(curl_log)" != *"Priority: max"* ]]
+}
+
+@test "symlink changes are counted and named" {
+    # The devbox collects them now because hashing cannot see one. A count that
+    # ignored them would report a substitution as nothing at all.
+    stub_ssh "LINK /usr/local/bin/x -> /bin/sh" 0
+    run_watch accept
+    stub_ssh "LINK /usr/local/bin/x -> /tmp/evil" 0
+    run_watch check
+    [[ "$(curl_log)" == *"symlink"* ]]
+}
+
+@test "the watched paths are configurable, and the default is not empty" {
+    export DEJIMA_GUARD_CRITICAL_PATHS='/etc/mine'
+    stub_ssh "FILE aaa /etc/mine" 0
+    run_watch accept
+    stub_ssh "FILE bbb /etc/mine" 0
+    run_watch check
+    [[ "$(curl_log)" == *"watched path changed"* ]]
+}
