@@ -1131,3 +1131,18 @@ SSHEOF
     run_watch accept
     [ "$status" -eq 0 ]
 }
+
+@test "no credential is set in the compose environment block" {
+    # Everything in `environment:` is visible to `docker inspect` and to
+    # anything that can read /proc, which is the reason the token was already
+    # kept out. The heartbeat URL belongs with it: an Uptime Kuma push URL
+    # carries its token in the path, so holding it is enough to tell Kuma this
+    # guard is healthy and suppress the one signal that reports a dead one.
+    for key in TOKEN HEARTBEAT_URL; do
+        grep -q "DEJIMA_GUARD_$key:" "$REPO/docker-compose.example.yml" \
+            && { echo "DEJIMA_GUARD_$key is in the compose environment"; false; }
+    done
+    # And it is still reachable, in the file that is mounted as a secret.
+    grep -q '^heartbeat_url' "$REPO/etc/config.example"
+    grep -q 'heartbeat_url' "$REPO/README.md"
+}
