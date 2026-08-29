@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Brad Anderson
+#
+# Puts the guard's public key on the devbox, restricted, and then proves the
+# restriction holds.
+#
+# WHY NOT ssh-copy-id. It copies the bare key with no options, and a bare key
+# here is a shell on the devbox for whoever eventually takes this machine -
+# which is the machine holding the evidence about that one. The line has to
+# carry a forced command, and ssh-copy-id has no way to attach one.
+#
+# Doing it by hand instead means two steps with a gap between them: copy the
+# key, then edit the file to add the restriction. In that gap an unrestricted
+# key is live. This writes the restricted line in one append, so the key is
+# never installed without its restriction.
+#
+# Run once, from the machine the guard runs on, as yourself - it connects with
+# your own credentials, not the guard's. The guard's key is what it installs,
+# not what it uses.
+
+set -euo pipefail
+
+PROG=${0##*/}
+CONF=${DEJIMA_GUARD_CONF:-/etc/dejima-guard/config}
+SHELL_PATH=${DEJIMA_GUARD_SHELL_PATH:-/usr/local/sbin/dejima-guard-shell}
+
+say() { printf '%s\n' "$*" >&2; }
+die() { say "$PROG: $*"; exit 2; }
+
+cfg() {
+    local v="" env_name
+    env_name="DEJIMA_GUARD_$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
+    v=$(printf '%s' "${!env_name-}")
+    [ -n "$v" ] || { [ -r "$CONF" ] && v=$(sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$CONF" | tail -1); }
+    [ -n "$v" ] || v="${2-}"
+    printf '%s\n' "$v"
+}
+
+PUB=""; TARGET=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --pub) PUB="${2:?--pub needs a file}"; shift 2 ;;
+        -h|--help)
+            sed -n '5,22p' "$0" | sed 's/^# \{0,1\}//'
+            printf '\nusage: %s [--pub FILE] [user@host]\n' "$PROG" >&2
+            exit 0 ;;
+        *) TARGET="$1"; shift ;;
+    esac
+done
+
+[ -n "$TARGET" ] || {
+    u=$(cfg devbox_user); h=$(cfg devbox_host)
+    [ -n "$u" ] && [ -n "$h" ] || die "no devbox_user/devbox_host in $CONF, and no user@host given"
+    TARGET="$u@$h"
+}
+[ -n "$PUB" ] || PUB="$(cfg ssh_key /var/lib/dejima-guard/id_ed25519).pub"
+[ -r "$PUB" ] || die "cannot read $PUB - generate the key first, or pass --pub"
+
+KEY="$(cat "$PUB")"
+case "$KEY" in
+    ssh-*|ecdsa-*|sk-*) ;;
+    *) die "$PUB does not look like a public key" ;;
+esac
+
+# THE RESTRICTION, and it must stay identical to what dejima-devbox-hardener's
+# docs/building-a-devbox.md section 7 documents. Two repositories, one line.
+#
+# The forced command ignores whatever was asked for and runs dejima-guard-shell,
+# which whitelists the two commands the guard sends. The no-* options remove
+# everything else a key can be used for: this key opens no tunnels, forwards no
+# agent, and gets no terminal.
+OPTS="command=\"$SHELL_PATH\",no-port-forwarding,no-agent-forwarding,no-pty,no-X11-forwarding"
+LINE="$OPTS $KEY"
+
+say "Installing the guard's key on $TARGET"
+say "  restricted to: $SHELL_PATH"
+say ""
+say "This connects as you, with your own credentials. You may be asked for a"
+say "password or a passphrase - that is your login to the devbox, not the"
+say "guard's."
+say ""
+
+# Idempotent, and matched on the key itself rather than the whole line: an
+# operator who added it by hand with different options should be told, not
+# given a second copy that shadows nothing and confuses the next reader.
+#
+# Appended in one write, so the key is never present without its restriction.
+# Status captured without a negation. `if ! cmd; then rc=$?` reads the status
+# of the NEGATION, which is zero whenever the branch is taken - so the specific
+# message below could never fire and every failure looked the same.
+rc=0
+printf '%s\n' "$LINE" | ssh "$TARGET" "
+    set -e
+    umask 077
+    mkdir -p ~/.ssh
+    touch ~/.ssh/authorized_keys
+    line=\$(cat)
+    key=\$(printf '%s' \"\$line\" | awk '{print \$(NF-1), \$NF}')
+    if grep -qF \"\$key\" ~/.ssh/authorized_keys; then
+        if grep -qF \"$SHELL_PATH\" ~/.ssh/authorized_keys; then
+            echo 'already present, and restricted'
+        else
+            echo 'ALREADY PRESENT WITHOUT THE RESTRICTION' >&2
+            exit 3
+        fi
+    else
+        printf '%s\n' \"\$line\" >> ~/.ssh/authorized_keys
+        echo 'installed'
+    fi
+" || rc=$?
+if [ "$rc" -ne 0 ]; then
+    [ "$rc" = 3 ] && die "that key is already in authorized_keys with different options.
+Remove the existing line and run this again, rather than having two entries -
+whichever ssh matches first wins, and it will not be the one you expect."
+    die "could not install the key on $TARGET"
+fi
+
+# --- prove the restriction ---------------------------------------------------
+#
+# The runbook used to ask the operator to run four commands by hand and read
+# the results. Most people run the two that should work. These are the two
+# that matter, and a restriction nobody tried is a restriction nobody has.
+
+say ""
+say "Checking what that key can do."
+GKEY="${PUB%.pub}"
+sshg() { ssh -i "$GKEY" -o BatchMode=yes -o ConnectTimeout=10 "$TARGET" "$1" 2>&1; }
+
+fails=0
+for c in "dejima-devbox-audit reach" "dejima-devbox-audit drift --state"; do
+    if sshg "$c" >/dev/null; then
+        say "  permitted   $c"
+    else
+        say "  FAILED      $c"
+        say "              This is one the guard needs. Check that"
+        say "              $SHELL_PATH exists on the devbox and that sudoers"
+        say "              permits it - dejima-devbox-hardener section 7."
+        fails=1
+    fi
+done
+for c in "cat /etc/shadow" "dejima-devbox-audit drift --accept"; do
+    if sshg "$c" | grep -q refused; then
+        say "  refused     $c"
+    else
+        say "  NOT REFUSED $c"
+        say "              The forced command is not in force. Do not leave"
+        say "              this key installed until it is."
+        fails=1
+    fi
+done
+
+say ""
+if [ "$fails" = 0 ]; then
+    say "Both halves hold: the guard can collect, and that key can do nothing else."
+    exit 0
+fi
+say "Something above is wrong. The guard will not work, or the key is worth"
+say "more than it should be. Fix it before relying on either."
+exit 1

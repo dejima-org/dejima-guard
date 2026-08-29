@@ -81,12 +81,29 @@ cp docker-compose.example.yml docker-compose.yml
 $EDITOR docker-compose.yml
 ```
 
-**2. Make a key for the guard**, whose public half goes on the devbox.
+**2. Make a key for the guard and put it on the devbox.**
 
 ```sh
 mkdir -p secrets
 ssh-keygen -t ed25519 -N '' -f secrets/guard_key -C dejima-guard
+bin/dejima-guard-install-key --pub secrets/guard_key.pub you@devbox
 ```
+
+That connects **as you**, with your own credentials — the guard's key is what
+it installs, not what it uses. It then tries four commands with the new key and
+tells you whether the restriction holds.
+
+**Not `ssh-copy-id`.** That copies the bare key with no options, and a bare key
+here is a shell on the devbox for whoever eventually takes *this* machine —
+which is the machine holding the evidence about that one. The line needs a
+forced command, and `ssh-copy-id` has no way to attach one. Doing it by hand
+instead means copy-then-edit, with a window in between where an unrestricted
+key is live; this writes the restricted line in a single append.
+
+It needs `dejima-guard-shell` on the devbox and a sudoers rule permitting the
+two audit commands — both from
+[dejima-devbox-hardener §7](https://gitbox.branderson.io/dejima/dejima-devbox-hardener/src/branch/main/docs/building-a-devbox.md).
+If either is missing the check above says which.
 
 **3. Write the secret config.** This is the one file that is not a copy of
 anything: create `secrets/config` and put in it whatever must not be in the
@@ -257,6 +274,8 @@ dejima-guard check       # what the timer runs
 dejima-guard report      # the last cycle's detail
 dejima-guard accept      # record the devbox's current state as the baseline
 dejima-guard test-alert  # publish a test alert, then go and look
+
+dejima-guard-install-key # put the guard's key on a devbox, restricted
 ```
 
 `accept` is a decision, which is why a check never makes it. After an `apt
