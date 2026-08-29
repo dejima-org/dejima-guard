@@ -8,13 +8,45 @@ Wants=network-online.target
 Type=oneshot
 ExecStart=@@BIN_DIR@@/dejima-guard check
 
+# NOT ROOT, and this is the setting that matters most here.
+#
+# The container path has always run as its own uid, on the argument that running
+# as root grants root to a program holding an SSH key to another machine, for no
+# reason at all. That argument does not stop being true on a host, and this unit
+# used to disagree with it: no User=, so a bug in the guard yielded root on a
+# machine this project describes no hardening for, rather than an unprivileged
+# account in a capability-dropped container.
+#
+# StateDirectory creates /var/lib/dejima-guard and chowns it to this user, so it
+# replaces the ReadWritePaths line rather than joining it.
+User=dejima-guard
+Group=dejima-guard
+StateDirectory=dejima-guard
+
+# NoNewPrivileges does not drop capabilities for root, so on the old unit it was
+# doing less than it looked like it was. Emptied outright: this opens two
+# outbound connections and writes one directory.
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+PrivateDevices=yes
+ProtectKernelModules=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
 # It listens on nothing and needs almost nothing. Whatever this machine is, it
 # is not this program's to put at risk.
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/var/lib/dejima-guard
 ProtectKernelTunables=yes
 ProtectControlGroups=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+
+# The watched host chooses how much it sends back. The collector caps that
+# itself and treats an over-long answer as a finding; these are the backstop for
+# everything the cap does not cover, on a machine that is running other things.
+MemoryMax=256M
+TasksMax=64

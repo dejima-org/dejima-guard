@@ -69,18 +69,43 @@ heartbeats() { curl_log | grep -c 'kuma.example.invalid' || true; }
 
 # --- the first run ----------------------------------------------------------
 
-@test "the first run records a baseline and does not alert" {
-    # Everything is new on a first run. Alerting on it would train the operator
-    # to dismiss the first alert they ever get from this.
+@test "a first run refuses rather than baselining whatever it finds" {
+    # It used to take one and print a warning. Under the timer that is five
+    # minutes after boot, unattended, quite possibly before anyone has looked at
+    # the machine, with the warning going to a journal nobody is reading yet -
+    # and everything this program says afterwards rests on that file being an
+    # honest picture of a clean box.
     stub_ssh "FILE aaa /etc/one" 0
     run_watch check
+    [ "$status" -ne 0 ]
+    [ ! -f "$DEJIMA_GUARD_STATE/baseline" ]
+    [[ "$output" == *"accept"* ]]
+}
+
+@test "a guard with no baseline reports as down, rather than as healthy" {
+    # It is not watching. The dead-man's switch is the one channel that can say
+    # so, and a heartbeat here would tell it all is well.
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch check
+    [ "$(heartbeats)" = 0 ]
+    [ "$(alerts)" = 0 ]
+}
+
+@test "accept takes the baseline, and a check against it alerts nothing" {
+    # Everything is new the first time. Alerting on it would train the operator
+    # to dismiss the first alert they ever get from this.
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept
     [ "$status" -eq 0 ]
     [ -f "$DEJIMA_GUARD_STATE/baseline" ]
+    run_watch check
+    [ "$status" -eq 0 ]
     [ "$(alerts)" = 0 ]
 }
 
 @test "an unchanged box alerts nothing and sends the heartbeat" {
     stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept          # the baseline is a decision now
     run_watch check
     run_watch check
     [ "$status" -eq 0 ]
@@ -131,6 +156,7 @@ heartbeats() { curl_log | grep -c 'kuma.example.invalid' || true; }
     # An apt upgrade otherwise arrives as forty pushes, and the next real alert
     # lands in a topic already muted.
     stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept          # the baseline is a decision now
     run_watch check
     curl_reset
     stub_ssh "FILE aaa /etc/one
@@ -147,6 +173,7 @@ UNIT backdoor.service" 0
     # push hands it a channel to the operator's phone - the thing dejima's own
     # notification guarantee exists to prevent, defeated one layer out.
     stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept          # the baseline is a decision now
     run_watch check
     curl_reset
     stub_ssh "FILE aaa /etc/one
@@ -158,6 +185,7 @@ FILE bbb /etc/evil-http-backdoor" 0
 
 @test "the detail is kept locally, where the alert deliberately does not put it" {
     stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept          # the baseline is a decision now
     run_watch check
     stub_ssh "FILE aaa /etc/one
 FILE bbb /etc/evil-http-backdoor" 0
@@ -167,6 +195,7 @@ FILE bbb /etc/evil-http-backdoor" 0
 
 @test "containment failing alerts even when nothing changed" {
     stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept          # the baseline is a decision now
     run_watch check
     curl_reset
     stub_ssh "FILE aaa /etc/one" 1
@@ -177,6 +206,7 @@ FILE bbb /etc/evil-http-backdoor" 0
 
 @test "both wrong at once is one alert, at max" {
     stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept          # the baseline is a decision now
     run_watch check
     curl_reset
     stub_ssh "FILE bbb /etc/two" 1
@@ -191,6 +221,7 @@ FILE bbb /etc/evil-http-backdoor" 0
     # Every call site used to end in `|| true`, so a wrong token produced
     # exactly nothing: drift found, ALERTED printed, no alert in existence.
     stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept          # the baseline is a decision now
     run_watch check
     printf '#!/bin/sh\nexit 22\n' > "$STUB/curl"; chmod +x "$STUB/curl"
     stub_ssh "FILE bbb /etc/two" 0
@@ -222,6 +253,7 @@ EOF
 @test "the detail is still written when the alert could not be sent" {
     # It is the only surviving record of a finding nobody was told about.
     stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept          # the baseline is a decision now
     run_watch check
     printf '#!/bin/sh\nexit 22\n' > "$STUB/curl"; chmod +x "$STUB/curl"
     stub_ssh "FILE bbb /etc/evil" 0
@@ -232,6 +264,7 @@ EOF
 @test "no alerting configured at all is a failure, not a quiet success" {
     stub_ssh "FILE aaa /etc/one" 0
     printf 'devbox_host = devbox.example.invalid\ndevbox_user = tester\n' > "$DEJIMA_GUARD_CONF"
+    run_watch accept          # the baseline is a decision now
     run_watch check
     stub_ssh "FILE bbb /etc/two" 0
     run_watch check
@@ -289,7 +322,8 @@ EOF
 @test "the environment overrides the config file" {
     stub_ssh "FILE aaa /etc/one" 0
     printf 'devbox_host = wrong.example.invalid\ndevbox_user = tester\n' > "$DEJIMA_GUARD_CONF"
-    DEJIMA_GUARD_DEVBOX_HOST=devbox.example.invalid run_watch check
+    chmod 0640 "$DEJIMA_GUARD_CONF"
+    DEJIMA_GUARD_DEVBOX_HOST=devbox.example.invalid run_watch accept
     [ "$status" -eq 0 ]
     [ -f "$DEJIMA_GUARD_STATE/baseline" ]
 }
@@ -298,6 +332,7 @@ EOF
     # The container path must not become the only path. A systemd host mounts
     # nothing and sets nothing.
     stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept          # the baseline is a decision now
     run_watch check
     [ "$status" -eq 0 ]
 }
@@ -464,6 +499,7 @@ devbox_user = tester\nntfy_url = ntfy.example.invalid/x\n' > "$DEJIMA_GUARD_CONF
     # A fully qualified name in a title pushes the finding off the end of the
     # line, leaving a push that says only which machine, never what.
     stub_ssh "FILE /etc/passwd aaaa" 0
+    run_watch accept          # the baseline is a decision now
     run_watch check                    # first run takes the baseline
     stub_ssh "FILE /etc/passwd bbbb" 0
     run_watch check
@@ -734,6 +770,7 @@ keyline() { awk '{print $1, $2}' "$BATS_TEST_TMPDIR/hk_$1.pub"; }
     # box the report is about, so a compromised devbox could name a file such
     # that the evidence of it scrolls past as an all-clear.
     stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept          # the baseline is a decision now
     run_watch check                     # first cycle takes the baseline
     stub_ssh "$(printf 'FILE aaa /etc/\033[2K\033[Aall-clear')" 0
     run_watch check                     # second produces the diff, and a report
@@ -746,6 +783,7 @@ keyline() { awk '{print $1, $2}' "$BATS_TEST_TMPDIR/hk_$1.pub"; }
     # A filename with an escape sequence in it is itself a finding. One that
     # vanished silently would be the second thing this got wrong.
     stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept          # the baseline is a decision now
     run_watch check
     stub_ssh "$(printf 'FILE aaa /etc/we\001ird')" 0
     run_watch check
@@ -757,6 +795,7 @@ keyline() { awk '{print $1, $2}' "$BATS_TEST_TMPDIR/hk_$1.pub"; }
     # Stripping to ASCII would mangle every accented filename on the box into a
     # difference that never goes away.
     stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept          # the baseline is a decision now
     run_watch check
     stub_ssh 'FILE aaa /etc/café-und-größe' 0
     run_watch check
@@ -935,6 +974,7 @@ SSHEOF
     # An Uptime Kuma push URL carries its token in the path, so the URL is the
     # credential rather than merely the destination.
     stub_ssh "FILE /etc/passwd aaaa" 0
+    run_watch accept          # the baseline is a decision now
     run_watch check
     [[ "$(curl_log)" == *kuma.example.invalid* ]]
     [[ "$(curl_argv)" != *kuma.example.invalid* ]]
@@ -972,4 +1012,122 @@ url = "http://evil.example.invalid/'
     dash=$(printf '\xe2\x80\x94')
     found=$(cd "$REPO" && git ls-files | xargs grep -nF "$dash" 2>/dev/null || true)
     [ -z "$found" ] || { echo "$found"; false; }
+}
+
+# --- the guard's own host ------------------------------------------------------
+#
+# The container path has always run unprivileged in a capability-dropped
+# sandbox. The host path runs on whatever the operator has, and this project
+# describes no hardening for that machine, so what the unit asks for is the
+# whole of what bounds a bug here.
+
+@test "the systemd unit does not run as root" {
+    # The Dockerfile argues that running as root grants root to a program
+    # holding an SSH key to another machine, for no reason at all. That argument
+    # does not stop being true on a host, and the unit used to disagree with it.
+    grep -q '^User=' "$REPO/systemd/dejima-guard.service"
+    grep -q '^StateDirectory=' "$REPO/systemd/dejima-guard.service"
+}
+
+@test "the unit empties the capability bounding set" {
+    # NoNewPrivileges does not drop capabilities for root, so on the old unit it
+    # was doing less than it looked like it was doing.
+    grep -q '^CapabilityBoundingSet=$' "$REPO/systemd/dejima-guard.service"
+}
+
+@test "the unit bounds memory and tasks" {
+    # The watched host chooses how much it sends. The collector caps that, and
+    # these are the backstop for what the cap does not cover.
+    grep -q '^MemoryMax=' "$REPO/systemd/dejima-guard.service"
+    grep -q '^TasksMax=' "$REPO/systemd/dejima-guard.service"
+}
+
+@test "SECURITY.md does not claim a non-root uid the host path lacks" {
+    # It listed "runs as a non-root uid" among the stronger properties, which
+    # was true of the container and read as a property of the project.
+    if grep -q 'non-root uid' "$REPO/SECURITY.md"; then
+        grep -q '^User=' "$REPO/systemd/dejima-guard.service"
+    fi
+}
+
+# --- how much the watched host may send ---------------------------------------
+
+@test "an oversize response is a finding, not something to truncate and diff" {
+    # Truncating would hand the devbox a way to manufacture a diff, or to cut
+    # the state off just before whatever it added.
+    export DEJIMA_GUARD_MAX_STATE_BYTES=2048
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept
+    big=$(head -c 9000 /dev/zero | tr '\0' 'x')
+    stub_ssh "$big" 0
+    run_watch check
+    [ "$status" -ne 0 ]
+    [[ "$(curl_log)" == *"oversize"* ]]
+}
+
+@test "an oversize response does not become the baseline" {
+    export DEJIMA_GUARD_MAX_STATE_BYTES=2048
+    big=$(head -c 9000 /dev/zero | tr '\0' 'x')
+    stub_ssh "$big" 0
+    run_watch accept
+    [ "$status" -ne 0 ]
+    [ ! -f "$DEJIMA_GUARD_STATE/baseline" ]
+}
+
+@test "a capped read is not reported as the devbox being unreachable" {
+    # head closing the pipe sends SIGPIPE to ssh, so with pipefail on, a capped
+    # read looks like a failed connection - the one reading that sends an
+    # operator to the wrong end of the problem.
+    export DEJIMA_GUARD_MAX_STATE_BYTES=2048
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept
+    big=$(head -c 9000 /dev/zero | tr '\0' 'x')
+    stub_ssh "$big" 0
+    run_watch check
+    [[ "$(curl_log)" != *unreachable* ]]
+}
+
+@test "a normal-sized state still collects" {
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept
+    [ -f "$DEJIMA_GUARD_STATE/baseline" ]
+    grep -q '/etc/one' "$DEJIMA_GUARD_STATE/baseline"
+}
+
+# --- what the ssh client is allowed to inherit --------------------------------
+
+@test "the connection names the settings a local ssh_config could widen" {
+    # ssh reads /etc/ssh/ssh_config and the account's ~/.ssh/config, neither of
+    # which this project owns, on a connection to a host the design assumes may
+    # be hostile.
+    stub_ssh "FILE aaa /etc/one" 0
+    cat > "$STUB/ssh" <<'SSHEOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$DEJIMA_GUARD_STATE/ssh.log"
+case "$*" in *"drift --state"*) echo "FILE aaa /etc/one" ;; esac
+SSHEOF
+    chmod +x "$STUB/ssh"
+    run_watch accept
+    for o in ForwardAgent=no ClearAllForwardings=yes PermitLocalCommand=no ControlMaster=no; do
+        grep -q "$o" "$DEJIMA_GUARD_STATE/ssh.log" || { echo "missing $o"; false; }
+    done
+}
+
+# --- the config file is executable-equivalent ---------------------------------
+
+@test "a group-writable config is refused, since it names a command to run" {
+    # alert_command means write access to this file is code execution as
+    # whoever the guard runs as. ssh takes the same line about a private key.
+    chmod 0660 "$DEJIMA_GUARD_CONF"
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch check
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"writable by group"* ]]
+}
+
+@test "a correctly permissioned config is accepted" {
+    chmod 0640 "$DEJIMA_GUARD_CONF"
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept
+    [ "$status" -eq 0 ]
 }

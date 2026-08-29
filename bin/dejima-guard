@@ -53,6 +53,27 @@ die() { say "$PROG: $*"; exit 2; }
 # `docker inspect` and to anything that can read /proc, which a token in a
 # 0640 file is not - so the token is the one value worth mounting even when
 # everything else comes from compose.
+# The config names a command to run (alert_command), so write access to it is
+# code execution as whoever this runs as. That makes its mode part of the
+# security of the thing rather than tidiness, and worth refusing rather than
+# noting - ssh takes the same line about a private key, for the same reason.
+#
+# Writable is what is checked, not readable: the container path mounts this file
+# with the host's ownership, and group-readable is normal there.
+check_conf_perms() {
+    local mode
+    [ -f "$CONF" ] || return 0
+    mode=$(stat -c %a "$CONF" 2>/dev/null) || return 0
+    # Masked arithmetic, not a pattern on the digits. Matching the last
+    # character tests other-write and misses group-write entirely, which is the
+    # half a shared machine is most likely to have.
+    if [ $(( 8#$mode & 0022 )) -ne 0 ]; then
+        die "$CONF is writable by group or others (mode $mode).
+It names a command this program runs, so that is code execution as $(id -un).
+  chmod 0640 $CONF"
+    fi
+}
+
 cfg() {  # cfg KEY [DEFAULT]
     local v="" env_name
     env_name="DEJIMA_GUARD_$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
@@ -165,6 +186,19 @@ ssh_devbox() {  # ssh_devbox COMMAND...
     # Found on a real devbox: the installer's own check reported the forced
     # command not in force, because it had the same bug.
     [ -n "$key" ] && opts="$opts -o IdentitiesOnly=yes"
+
+    # Named rather than inherited. ssh reads /etc/ssh/ssh_config and the running
+    # account's ~/.ssh/config, neither of which this project owns, on a machine
+    # whose hardening it describes nothing about - and this is a connection to a
+    # host the whole design assumes may be hostile.
+    #
+    # These four are the ones that let the local config or the far end widen
+    # what the connection can do: an agent to borrow, a local command to run, a
+    # forwarding to open, a multiplexed socket to ride in on. Set here rather
+    # than by -F /dev/null, which would also discard a legitimate ProxyJump the
+    # operator needs to reach the devbox at all.
+    opts="$opts -o ForwardAgent=no -o ClearAllForwardings=yes"
+    opts="$opts -o PermitLocalCommand=no -o ControlMaster=no -o ControlPath=none"
     # shellcheck disable=SC2086
     ssh $opts ${key:+-i "$key"} "$user@$host" "$@"
 }
@@ -189,6 +223,40 @@ ssh_devbox() {  # ssh_devbox COMMAND...
 # structure rather than content, and anything printable is left alone so a
 # legitimate non-ASCII path still reads as itself.
 sanitise() { LC_ALL=C tr '\000-\011\013-\037\177' '?'; }
+
+# Collection, with a ceiling on how much the watched host may send.
+#
+# The devbox chose the size and nothing capped it: the answer went into a shell
+# variable, then a file, then both sides of a diff. A compromised devbox could
+# return as much as it liked, which is memory pressure and a full /var/lib on a
+# machine that is running other things. It is the clearest thing the watched
+# host can do to the guard's host.
+#
+# It never defeated the watching - a guard that dies stops sending the heartbeat
+# and the dead-man's switch says so - so this is about blast radius on the host
+# rather than about detection.
+#
+# An over-long answer is a FINDING, not data to truncate and diff. Truncating
+# would produce a state that differs from the baseline in a way the devbox
+# controls, which is a way to manufacture alerts or, worse, to cut the state off
+# just before whatever was added.
+#
+# pipefail is off for the pipeline on purpose. `head` closing the pipe sends
+# SIGPIPE to ssh, so with pipefail a capped read reports as a failed connection
+# - the one reading that sends an operator to the wrong end. The size is checked
+# first and ssh's own status is read from PIPESTATUS.
+collect() {  # collect DEST_FILE ERR_FILE; 0 ok, 1 too big, 2 ssh failed
+    local cap rc
+    cap=$(cfg max_state_bytes 8388608)
+    set +o pipefail
+    ssh_devbox dejima-devbox-audit drift --state 2>"$2" \
+        | head -c "$((cap + 1))" > "$1"
+    rc=${PIPESTATUS[0]}
+    set -o pipefail
+    [ "$(wc -c < "$1")" -le "$cap" ] || return 1
+    [ "$rc" -eq 0 ] || return 2
+    return 0
+}
 
 # The watched host's own name, for alerts that would otherwise say "the devbox".
 #
@@ -315,6 +383,7 @@ summarise() {  # summarise DIFF_FILE
 # result and the cycle carried on as though the box had answered with nothing.
 require_config() {
     local h
+    check_conf_perms
     h=$(cfg devbox_host)
     [ -n "$h" ] || die "no devbox_host in $CONF - nothing to watch"
     # No default for the account, deliberately.
@@ -372,7 +441,7 @@ require_config() {
 }
 
 cmd_check() {
-    local rc=0 state now reach_rc reach_out changed=0 body=""
+    local rc=0 now reach_rc reach_out changed=0 body=""
     require_config
     install -d -m 0750 "$STATE_DIR"
     now=$(mktemp) || die "no temp space"
@@ -393,7 +462,19 @@ cmd_check() {
     # LOCALLY ONLY. This text is the one thing near an alert that the far end
     # has any say in, so it goes to the log and the report on this machine and
     # never into the push.
-    if ! state=$(ssh_devbox dejima-devbox-audit drift --state 2>"$ssh_err"); then
+    local craw crc=0
+    craw="$now.raw"
+    collect "$craw" "$ssh_err" || crc=$?
+
+    if [ "$crc" -eq 1 ]; then
+        alert max "$(target_short): oversize response" \
+            "The audit on $(target) returned more than this guard will accept. That is not a state; it is a machine sending as much as it can." || true
+        say "FAIL: $(target) returned more than $(cfg max_state_bytes 8388608) bytes."
+        say "  Nothing was compared. A real state is a few hundred kilobytes."
+        return 1
+    fi
+
+    if [ "$crc" -ne 0 ]; then
         sanitise < "$ssh_err" > "$ssh_err.clean" && mv "$ssh_err.clean" "$ssh_err"
         alert max "$(target_short): unreachable" \
             "dejima-guard could not collect from $(target). It may be down, off the network, or refusing this key." || true
@@ -415,21 +496,20 @@ cmd_check() {
         return 1
     fi
 
-    # Tested on the string, not on the file. `printf '%s\n' ""` writes a
-    # newline, so a file holding nothing useful is still one byte long and
-    # passes -s - which had an audit that returned nothing read as a valid
-    # state, and on a first run recorded it as the baseline.
-    if [ -z "$state" ]; then
+    # Sanitised on the way from the capped capture into the file the diff reads,
+    # so the baseline and every diff against it are clean too.
+    sanitise < "$craw" > "$now"
+
+    # Tested for a non-empty line rather than a non-empty file. `printf '%s\n' ""`
+    # writes a newline, so a file holding nothing useful is still one byte long
+    # and passes -s, which had an audit that returned nothing read as a valid
+    # state and, on a first run, recorded it as the baseline.
+    if ! grep -q . "$now"; then
         alert max "$(target_short): audit returned nothing" \
             "The audit on $(target) ran and produced no state. That is not a clean box; it is a check that did not run." || true
         say "FAIL: empty state"
         return 1
     fi
-    # Sanitised after capture, not piped through on the way in: a pipeline would
-    # put tr's status where ssh's needs to be, and reading the wrong end of a
-    # pipeline is a mistake this program has already made once.
-    state=$(printf '%s\n' "$state" | sanitise)
-    printf '%s\n' "$state" > "$now"
 
     # 2. Containment, which the devbox can answer for itself.
     reach_rc=0
@@ -437,12 +517,24 @@ cmd_check() {
     reach_out=$(printf '%s\n' "$reach_out" | sanitise)
 
     # 3. Drift, which it cannot: the baseline is here.
+    # NOT TAKEN HERE, and this is the point of having a separate accept.
+    #
+    # It used to record one and print a warning. Under the timer that happens
+    # five minutes after boot, unattended, quite possibly before anybody has
+    # looked at the machine, and the warning goes to a journal nobody is reading
+    # yet. Everything this program says afterwards rests on that file being an
+    # honest picture of a clean box.
+    #
+    # No heartbeat either. A guard that has not been told what normal looks like
+    # is not watching, and the dead-man's switch is the channel that says so.
     if [ ! -f "$BASE" ]; then
-        cp "$now" "$BASE"
-        say "First run. Baseline recorded from the devbox as it is now."
-        say "  $(grep -c . "$BASE") entries. Take it on a box you believe is clean."
-        heartbeat
-        return 0
+        say "No baseline. Nothing to compare against, so nothing was compared."
+        say ""
+        say "  Take one deliberately, on a box you believe is clean:"
+        say "    $PROG accept"
+        say ""
+        say "  Until then this reports as down, which is what it is."
+        return 1
     fi
 
     diff --unchanged-line-format= --old-line-format='- %L' --new-line-format='+ %L' \
@@ -510,13 +602,22 @@ cmd_check() {
 # Accepting the current state is a decision, so it is a separate command and
 # never something a check does on its own.
 cmd_accept() {
-    local state
+    local raw err crc=0
     require_config
     install -d -m 0750 "$STATE_DIR"
-    state=$(ssh_devbox dejima-devbox-audit drift --state) || die "could not collect from the devbox"
-    [ -n "$state" ] || die "the devbox returned nothing - not accepting that as a baseline"
-    state=$(printf '%s\n' "$state" | sanitise)
-    printf '%s\n' "$state" > "$BASE"
+    raw=$(mktemp) || die "no temp space"
+    err=$(mktemp) || die "no temp space"
+    # shellcheck disable=SC2064
+    trap "rm -f '$raw' '$err'" EXIT
+
+    # Through the same capped collector as a check. A baseline is the one file
+    # here that everything else is compared against, so it is the last place to
+    # accept an unbounded answer from the machine being baselined.
+    collect "$raw" "$err" || crc=$?
+    [ "$crc" -ne 1 ] || die "$(target) returned more than $(cfg max_state_bytes 8388608) bytes - not accepting that as a baseline"
+    [ "$crc" -eq 0 ] || die "could not collect from the devbox"
+    grep -q . "$raw" || die "the devbox returned nothing - not accepting that as a baseline"
+    sanitise < "$raw" > "$BASE"
     say "Baseline accepted: $(grep -c . "$BASE") entries in $BASE"
     say "  Take it on a box you believe is clean. One taken on a compromised"
     say "  machine records the compromise as normal and reports clean forever."

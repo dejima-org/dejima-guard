@@ -34,32 +34,54 @@ half that matters: see
 ["Let the guard in"](https://gitbox.branderson.io/dejima/dejima-devbox-hardener/src/branch/main/docs/building-a-devbox.md#guard-access).
 `dejima-guard-install-key` proves the restriction rather than assuming it.
 
-## Where this is weaker than dejima, and why
+## What actually bounds this
 
-dejima runs untrusted code and is built accordingly. This runs one shell script
-against one host. Two of its controls are still missing here, and both are worth
-knowing about rather than discovering.
+Two things characterise the exposure, and both matter more than any comparison
+with the projects around it.
 
-**No egress bound.** dejima's central claim is a deny-by-default allowlist
-covering DNS as well as IP, which bounds where a compromised dependency can send
-things. This has none: the container reaches anything the host can. Its actual
-needs are three destinations: the devbox on 22, ntfy, and the heartbeat, so an
-allowlist is cheap, but it belongs to your host or your container network and
-this project neither ships nor requires one. Adding it inside the container is
-possible and is the wrong trade: it would mean granting `NET_ADMIN` to a
-container that currently drops every capability.
+**It runs on whatever you run it on.** The guard holds a key to the watched box
+and parses that box's output, and its exposure is bounded by the hardening of a
+machine this project does not describe and asks nothing of. A NAS, a home
+server, an existing VM: whatever it is, it is not hardened by anything here. The
+container path answers this for itself, running unprivileged with every
+capability dropped and the root filesystem read-only. The host path is a systemd
+unit, and what that unit asks for is the whole of the answer: its own account,
+an empty capability bounding set, and memory and task limits.
 
-**The credential is in the container.** dejima keeps the model credential out
-entirely, behind a proxy, so the container can use it without holding it. Here
-the private key is mounted. An `SSH_AUTH_SOCK` from the host would give the same
-use-without-possession and is not currently documented.
+What the guard does to protect that host: it never runs as root, it caps how
+much the watched machine may send it, it names the ssh settings a local
+`ssh_config` could otherwise widen, and it refuses a config file that is
+writable by group or others, because `alert_command` makes that file
+executable-equivalent.
 
-**No request logging.** dejima logs egress verdicts. This logs its findings and
-its failures, not its connections.
+**The collector runs on the watched host.** `dejima-devbox-audit` executes on
+the devbox, so root there can return whatever it likes, including last week's
+state verbatim. This is the detection ceiling and no amount of care on this side
+raises it. The heartbeat proves the guard ran, not that it saw the truth. What
+the design does buy is that lying has to be deliberate and continuous: the
+baseline is here, out of reach, so a payload that did not think to look is
+caught, and one that stops the collection entirely is caught by its silence.
 
-Where it is stronger: it drops every capability, mounts the root filesystem
-read-only, sets `no-new-privileges`, runs as a non-root uid, publishes no port,
-and accepts no inbound connection at all.
+## Where it sits next to the other projects
+
+Not a fourth enforcement layer. It enforces nothing, and it is the only one of
+the four that adds a machine holding credentials rather than taking some away.
+
+Three of dejima's controls have no equivalent here, and are worth knowing rather
+than discovering:
+
+- **No egress bound.** dejima's deny-by-default allowlist covers DNS as well as
+  IP. This has none: the container reaches whatever the host can. Its needs are
+  three destinations, so an allowlist is cheap, but it belongs to your host or
+  your container network. Doing it inside the container would mean granting
+  `NET_ADMIN` to something that currently drops every capability, which is a
+  worse trade than the gap.
+- **The credential is in the container.** dejima keeps the model credential out
+  entirely, behind a proxy. Here the private key is mounted. An `SSH_AUTH_SOCK`
+  from the host would give the same use-without-possession and is not documented
+  yet.
+- **No request logging.** dejima logs egress verdicts. This logs findings and
+  failures, not connections.
 
 ## What it deliberately does not do
 
