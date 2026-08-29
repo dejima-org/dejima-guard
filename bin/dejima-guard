@@ -366,14 +366,52 @@ LAST="$STATE_DIR/last-report"
 # the watched machine chose. A count of changed unit files is safe to send; the
 # name of one is not.
 summarise() {  # summarise DIFF_FILE
-    local f=$1 n_file n_unit n_port
+    local f=$1 n_file n_unit n_port n_link
     n_file=$(grep -c '^[+-] FILE ' "$f" || true)
     n_unit=$(grep -c '^[+-] UNIT ' "$f" || true)
     n_port=$(grep -c '^[+-] PORT ' "$f" || true)
+    n_link=$(grep -c '^[+-] LINK ' "$f" || true)
     [ "$n_file" -gt 0 ] && printf '%s file(s)\n' "$n_file"
+    [ "$n_link" -gt 0 ] && printf '%s symlink(s)\n' "$n_link"
     [ "$n_unit" -gt 0 ] && printf '%s systemd unit(s)\n' "$n_unit"
     [ "$n_port" -gt 0 ] && printf '%s listening port(s)\n' "$n_port"
     return 0
+}
+
+# Paths whose change is a different kind of event from a config edit.
+#
+# The audit's own binary is the sharp one. If it changed, everything this guard
+# has been told since is suspect, including the report saying so - and until now
+# that arrived as "1 file(s) changed", indistinguishable from a logrotate tweak
+# among a hundred others. The forced command, the sudoers rule and the
+# authorized_keys line are the same argument one layer out: they are what makes
+# the guard's access read-only, so a change to them is a change to what a stolen
+# key is worth.
+#
+# Matched as a substring against the whole diff line, which is a path in every
+# line kind this can appear in. The default list names the machinery this design
+# rests on; anything else an operator cares about goes in the config.
+CRITICAL_DEFAULT='/usr/local/sbin/dejima-devbox-audit
+/usr/local/sbin/dejima-guard-shell
+/etc/sudoers.d/dejima-guard
+/etc/ssh/sshd_config
+/.ssh/authorized_keys'
+
+critical_hits() {  # critical_hits DIFF_FILE -> matching lines
+    local f=$1 pat
+    while IFS= read -r pat; do
+        [ -n "$pat" ] || continue
+        grep -F -- "$pat" "$f" || true
+    done <<< "$(cfg critical_paths "$CRITICAL_DEFAULT")"
+}
+
+# A listener or an enabled unit that was not there before is not a config edit.
+#
+# It is the shape of a thing arranging to run again, or to be reached. Both were
+# folded into one "unexplained changes" alert at high, beside a checksum that
+# moved because logrotate ran.
+new_persistence() {  # new_persistence DIFF_FILE
+    grep -cE '^\+ (PORT|UNIT) ' "$1" || true
 }
 
 # Checked here rather than at the point of use.
@@ -549,9 +587,26 @@ cmd_check() {
     #
     # Not one per finding: an apt upgrade would otherwise arrive as forty
     # pushes, and the next real one lands in a topic already muted.
-    if [ "$changed" = 1 ] && [ "$reach_rc" -ne 0 ]; then
+    # Ordered by what the operator has to do about it, most serious first, and
+    # still one alert per cycle: an apt upgrade would otherwise arrive as forty
+    # pushes and the next real one would land in a muted topic.
+    local crit_n=0 newp=0
+    crit_n=$(critical_hits "$now.diff" | grep -c . || true)
+    newp=$(new_persistence "$now.diff")
+
+    if [ "$changed" = 1 ] && [ "$crit_n" -gt 0 ]; then
+        # No path names in the body. The devbox chose those strings, and the
+        # count plus the category is enough to say go and read the report.
+        alert max "$(target_short): watched path changed" \
+            "$crit_n line(s) changed under paths this guard treats as its own footing on $(target), including possibly the audit it collects with. Treat what it has reported since as unverified." || true
+        rc=1
+    elif [ "$changed" = 1 ] && [ "$reach_rc" -ne 0 ]; then
         alert max "$(target_short): changes and containment" \
             "On $(target): $body changed, and the containment check did not pass." || true
+        rc=1
+    elif [ "$newp" -gt 0 ]; then
+        alert max "$(target_short): new listener or unit" \
+            "On $(target): $body changed, and $newp of them is something newly arranged to run or to be reached." || true
         rc=1
     elif [ "$changed" = 1 ]; then
         alert high "$(target_short): unexplained changes" \

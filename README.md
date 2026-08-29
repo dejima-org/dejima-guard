@@ -235,6 +235,7 @@ other end of the connection, not the machine the guard runs on.
 | `ssh_key` | The private key **on this machine**. Its own, not a general-purpose administrative one |
 | `ssh_known_hosts` | Where the devbox's host key is remembered. Must persist: in a container, on the state volume. Populated by `dejima-guard trust-host`, never automatically |
 | `ssh_timeout` | Seconds to wait. The line between a slow devbox and a gone one |
+| `critical_paths` | Paths whose change is its own max-priority alert, one per line. Defaults to the audit binary, the forced command, the sudoers rule, `sshd_config` and `authorized_keys` |
 
 **Where alerts go.**
 

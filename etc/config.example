@@ -55,6 +55,20 @@ ssh_key = /var/lib/dejima-guard/id_ed25519
 # guard that cannot connect at all.
 ssh_known_hosts = /var/lib/dejima-guard/known_hosts
 
+# Paths whose change is a different kind of event from a config edit.
+#
+# The audit's own binary is the sharp one: if it changed, everything this guard
+# has been told since is suspect, including the report saying so. It used to
+# arrive as "1 file(s) changed", indistinguishable from a logrotate tweak among
+# a hundred others. The forced command, the sudoers rule and authorized_keys are
+# the same argument one layer out - they are what makes this access read-only,
+# so a change to them changes what a stolen key is worth.
+#
+# One per line, matched as a substring of the path. The default covers the
+# machinery this design rests on; add anything else you would want woken for.
+# critical_paths = /usr/local/sbin/dejima-devbox-audit
+#                  /etc/sudoers.d/dejima-guard
+
 # Seconds to wait for the connection. A devbox that is slow is not a devbox
 # that is gone, and this is the line between those two readings.
 ssh_timeout = 10
