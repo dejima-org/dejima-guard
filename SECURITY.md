@@ -43,7 +43,7 @@ knowing about rather than discovering.
 **No egress bound.** dejima's central claim is a deny-by-default allowlist
 covering DNS as well as IP, which bounds where a compromised dependency can send
 things. This has none: the container reaches anything the host can. Its actual
-needs are three destinations — the devbox on 22, ntfy, and the heartbeat — so an
+needs are three destinations: the devbox on 22, ntfy, and the heartbeat, so an
 allowlist is cheap, but it belongs to your host or your container network and
 this project neither ships nor requires one. Adding it inside the container is
 possible and is the wrong trade: it would mean granting `NET_ADMIN` to a
