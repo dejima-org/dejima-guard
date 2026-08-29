@@ -45,35 +45,32 @@ is not a service, and a machine of its own would be a poor trade for something
 whose whole job is to notice.
 
 ```sh
-sudo install -m 0755 bin/dejima-guard /usr/local/sbin/dejima-guard
+sudo install -m 0755 bin/dejima-guard bin/dejima-guard-install-key /usr/local/sbin/
 sudo install -d -m 0750 /etc/dejima-guard /var/lib/dejima-guard
 sudo install -m 0640 etc/config.example /etc/dejima-guard/config
 sudoedit /etc/dejima-guard/config
 ```
 
-Then a key of its own, restricted at the devbox end so it can run the two
-read-only subcommands and nothing else:
+A key of its own, put on the devbox restricted so it can run the two read-only
+subcommands and nothing else:
 
 ```sh
 sudo ssh-keygen -t ed25519 -N '' -f /var/lib/dejima-guard/id_ed25519
-sudo cat /var/lib/dejima-guard/id_ed25519.pub
+sudo dejima-guard-install-key
 ```
 
-`etc/config.example` has the `authorized_keys` line to pair it with. Then record
-the devbox's host key, which nothing else does and every other command needs:
+It authenticates to the devbox the ordinary way, so expect a password prompt —
+the guard's key is what it installs, not what it uses. It then tries four
+commands with the new key and reports whether the restriction holds. It needs
+`dejima-guard-shell` and a sudoers rule on the devbox, both from
+["Let the guard in"](https://gitbox.branderson.io/dejima/dejima-devbox-hardener/src/branch/main/docs/building-a-devbox.md#guard-access);
+if either is missing it says which.
+
+Then the devbox's host key, which nothing else records and every other command
+needs:
 
 ```sh
 sudo dejima-guard trust-host
-```
-
-`StrictHostKeyChecking` is left on, deliberately, and batch mode turns its
-prompt into a failure — so until this is run, every cycle reports the devbox
-unreachable at max priority. Compare the fingerprint it prints against
-`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the devbox, or pass
-`--fingerprint SHA256:...` and have it refuse to write anything that does not
-match. Then:
-
-```sh
 sudo dejima-guard check     # first run records the baseline, alerts nothing
 sudo install -m 0644 systemd/dejima-guard.{service,timer} /etc/systemd/system/
 sudo sed -i 's|@@BIN_DIR@@|/usr/local/sbin|' /etc/systemd/system/dejima-guard.service
@@ -83,17 +80,29 @@ sudo systemctl daemon-reload && sudo systemctl enable --now dejima-guard.timer
 **Take the first baseline on a box you believe is clean.** One taken on a
 compromised machine records the compromise as normal and reports clean forever.
 
+`trust-host` prints the fingerprint before writing it — compare it against
+`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the devbox, or pass
+`--fingerprint SHA256:...` and have it refuse anything else. Skipping it is not
+a quiet failure: host key checking is left on, batch mode turns its prompt into
+an error, and every cycle then reports the devbox unreachable at max priority.
+
 ### Or as a container
 
-**1. Copy the example and edit it.** Every variable in it is commented with
-what goes in it.
+**1. Copy the example and edit it.** Every variable is commented with what goes
+in it. Your copy is gitignored, and the example will not start as shipped — its
+host is a placeholder the guard refuses, so it cannot become a live config by
+being copied and forgotten.
 
 ```sh
 cp docker-compose.example.yml docker-compose.yml
 $EDITOR docker-compose.yml
 ```
 
-**2. Make a key for the guard and put it on the devbox.**
+**A copy, not an override.** `docker compose up` merges
+`docker-compose.override.yml` with the file it overrides rather than replacing
+it, so an override would leave the example's values in play.
+
+**2. Make a key and put it on the devbox**, as described above.
 
 ```sh
 mkdir -p secrets
@@ -101,116 +110,54 @@ ssh-keygen -t ed25519 -N '' -f secrets/guard_key -C dejima-guard
 bin/dejima-guard-install-key --pub secrets/guard_key.pub you@devbox
 ```
 
-That connects **as you**, with your own credentials — the guard's key is what
-it installs, not what it uses. It then tries four commands with the new key and
-tells you whether the restriction holds.
-
-**Not `ssh-copy-id`.** That copies the bare key with no options, and a bare key
+**Not `ssh-copy-id`.** It copies the bare key with no options, and a bare key
 here is a shell on the devbox for whoever eventually takes *this* machine —
-which is the machine holding the evidence about that one. The line needs a
-forced command, and `ssh-copy-id` has no way to attach one. Doing it by hand
-instead means copy-then-edit, with a window in between where an unrestricted
-key is live; this writes the restricted line in a single append.
+the one holding the evidence about that one. The line needs a forced command,
+which `ssh-copy-id` cannot attach, and doing it by hand means copy-then-edit
+with an unrestricted key live in between.
 
-It needs `dejima-guard-shell` on the devbox and a sudoers rule permitting the
-two audit commands — both from
-["Let the guard in"](https://gitbox.branderson.io/dejima/dejima-devbox-hardener/src/branch/main/docs/building-a-devbox.md#guard-access).
-If either is missing the check above says which.
-
-**3. Record the devbox's host key.** In a container this matters more, not
-less: the volume starts empty, and without it every cycle alerts that the
-devbox is unreachable.
-
-```sh
-docker compose run --rm dejima-guard dejima-guard trust-host
-```
-
-It prints the fingerprint before writing it. Compare that against
-`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` run on the devbox itself, or
-pass `--fingerprint SHA256:...` so it refuses to write anything else. It will
-not replace a key it already has: a host key that changed is either a rebuild
-or the thing this program exists to notice, and that is not a helper's call.
-
-**4. Write the secret config.** This is the one file that is not a copy of
-anything: create `secrets/config` and put in it whatever must not be in the
-environment — on a self-hosted ntfy with access control, that is the token.
+**3. Write the secret config.** The one file that is not a copy of anything:
+whatever must not sit in the environment, which on a self-hosted ntfy is the
+token.
 
 ```
 ntfy_token = <the token, from your ntfy server>
 ```
 
-If your ntfy needs no token, the file can be empty, but it still has to exist:
-compose will refuse to start with a secret it cannot find.
+An ntfy needing no token can have this empty, but it must exist — compose will
+not start with a secret it cannot find.
 
 ```sh
 chmod 600 secrets/guard_key secrets/config
 sudo chown 10001:10001 secrets/guard_key secrets/config
 ```
 
-**The `chown` is not optional, and it is the first thing that goes wrong
-without it.** The image runs as uid 10001 rather than root, and compose mounts
-a file secret with the host's ownership and mode — so a key that is `0600` and
-yours is a key the container cannot open. ssh reports that as
-`Permission denied (publickey,password)`, which looks exactly like the devbox
-rejecting the key, and sends you to the far end to debug a file on this one.
-`dejima-guard` checks the key itself before connecting and says so plainly, but
-the `chown` is what fixes it.
+**The `chown` is not optional.** The image runs as uid 10001, and compose mounts
+a secret with the host's ownership — so a key that is `0600` and yours is one
+the container cannot open. 10001 is fixed in the `Dockerfile` and is part of the
+interface. Bind-mounting a host directory in place of the named volume needs the
+same treatment.
 
-10001 is fixed in the `Dockerfile` and is part of the interface, so it is safe
-to write down here.
-
-**5. Start it, then prove the alert path works.**
+**4. Record the host key and start it.**
 
 ```sh
+docker compose run --rm dejima-guard dejima-guard trust-host
 docker compose up -d
 docker compose exec dejima-guard dejima-guard test-alert
 ```
 
 **Go and check that alert arrived on your phone.** Nothing else exercises that
-path: a clean cycle never publishes, so a wrong token or a wrong topic sits
-undiscovered until the first real finding — and then takes it with it. The
-guard suppresses its heartbeat when a send fails, so a broken channel
-eventually shows up as a dead guard, but the first time you find that out
-should be now and not then.
-
-**A copy, not an override.** `docker compose up` reads `docker-compose.yml` and
-`docker-compose.override.yml` together and merges them, so overriding the
-example leaves its values in play rather than replacing them. Your copy is
-gitignored, which is also where your host and your URLs belong.
-
-The example will not start as shipped: its host is a placeholder the guard
-refuses, so it cannot become a live config by being copied and forgotten.
-
-The public half of that key goes in the devbox's `authorized_keys`, restricted
-as `etc/config.example` shows.
-
-**It never publishes a port, and it never should.** What makes a container an
-acceptable home for a program holding an SSH key to the devbox is that nothing
-can connect to it. The compose file drops every capability, mounts the root
-filesystem read-only, and sets `no-new-privileges`.
+path, and a broken one takes the first real finding with it.
 
 **The volume is not a cache.** It holds the baseline, the last report and
 `known_hosts`. Losing it is not a clean slate: a fresh baseline compares clean
-against everything for the rest of its life, and a fresh `known_hosts` fails
-host-key verification on every connection — which `BatchMode` turns into
-"could not reach the devbox", at max priority, forever. A false alarm that
-never stops is the kind that gets muted.
+against everything for the rest of its life, and a fresh `known_hosts` reports
+the devbox unreachable forever.
 
-**Config comes from the environment first, then the file.** Compose is where
-everything else about a deployment lives, so the environment is the ergonomic
-place for a hostname. It is the wrong place for a token: `docker inspect` shows
-it, and so does anything that can read `/proc`. Put secrets in the mounted
-config file, which is what `DEJIMA_GUARD_CONF` points at.
-
-**If you bind-mount a host directory instead of the named volume**, chown it to
-uid `10001` first. The image creates that user and the named volume inherits
-its ownership; a bind mount does not, and the guard cannot write its baseline
-to a directory owned by root.
-
-The image is Debian rather than Alpine deliberately: the diff that produces the
-change list uses `--unchanged-line-format`, which is GNU diffutils and not
-busybox. Alpine works once diffutils and coreutils are added back, at which
-point the smaller base has been patched towards this one a package at a time.
+**It never publishes a port, and never should.** What makes a container an
+acceptable home for a program holding an SSH key to the devbox is that nothing
+can connect to it. The compose file also drops every capability, mounts the root
+filesystem read-only, and sets `no-new-privileges`.
 
 ### What goes in each setting
 
