@@ -634,3 +634,68 @@ keyline() { awk '{print $1, $2}' "$BATS_TEST_TMPDIR/hk_$1.pub"; }
     [ -n "$uid" ]
     grep -q "chown $uid:$uid" "$REPO/README.md"
 }
+# --- what a URL may contain ---------------------------------------------------
+#
+# The rule refused "&", so it refused the push URL Uptime Kuma hands out - the
+# one value heartbeat_url is documented to hold. This project rejected the
+# setting this project recommends.
+#
+# Refusing a legitimate URL is not the safe direction. It costs the heartbeat,
+# which is the one signal a compromised devbox cannot suppress, so an
+# over-strict rule quietly removes the control that does not depend on the
+# watched machine cooperating.
+
+@test "an Uptime Kuma push URL is accepted, ampersands and all" {
+    export DEJIMA_GUARD_HEARTBEAT_URL='https://kuma.example.invalid/api/push/abc?status=up&msg=OK&ping='
+    stub_ssh "FILE /etc/passwd aaaa" 0
+    run_watch check
+    [[ "$output" != *"heartbeat_url contains"* ]]
+}
+
+@test "every character RFC 3986 permits is accepted" {
+    # Written out rather than sampled: the previous list looked complete too.
+    export DEJIMA_GUARD_NTFY_URL="https://h.example.invalid/p?a=1&b=2#f/x_y~z.w+q%20r,s;t=u!v\$w'x(y)z*"
+    stub_ssh "FILE /etc/passwd aaaa" 0
+    run_watch check
+    # Asserted as "not rejected at all" rather than as the absence of one
+    # message. Matching on the new wording passed against the old check, which
+    # rejected this URL saying something else.
+    [[ "$output" != *"ntfy_url"* ]]
+}
+
+@test "a URL with whitespace is still refused" {
+    export DEJIMA_GUARD_HEARTBEAT_URL='https://kuma.example.invalid/api/push/a b'
+    stub_ssh "" 0
+    run_watch check
+    [[ "$output" == *"whitespace"* ]]
+}
+
+@test "a URL with an embedded newline is refused" {
+    # The check that deletes permitted characters cannot see this one:
+    # command substitution strips a trailing newline, so what is left reads as
+    # empty and the value passes. It is also the character worth being surest
+    # about, being the one that turns one argument into two lines of something.
+    export DEJIMA_GUARD_HEARTBEAT_URL="$(printf 'https://kuma.example.invalid/a\nb')"
+    stub_ssh "" 0
+    run_watch check
+    [[ "$output" == *"whitespace"* ]] || [[ "$output" == *"control character"* ]]
+}
+
+@test "a refused URL names the character, not just the setting" {
+    # "contains a character that is not allowed here" was the whole report.
+    # Finding which one meant guessing, on a value that is usually long.
+    export DEJIMA_GUARD_HEARTBEAT_URL='https://kuma.example.invalid/a|b'
+    stub_ssh "" 0
+    run_watch check
+    [[ "$output" == *"|"* ]]
+}
+
+@test "the config example's own heartbeat_url would be accepted" {
+    # A shipped example the shipped check refuses is the failure this had.
+    url=$(sed -n 's/^[[:space:]]*heartbeat_url[[:space:]]*=[[:space:]]*//p' "$REPO/etc/config.example" | tail -1)
+    [ -n "$url" ]
+    export DEJIMA_GUARD_HEARTBEAT_URL="$url"
+    stub_ssh "FILE /etc/passwd aaaa" 0
+    run_watch check
+    [[ "$output" != *"heartbeat_url"* ]]
+}
