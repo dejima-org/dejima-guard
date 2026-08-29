@@ -837,18 +837,30 @@ SSHEOF
 }
 
 @test "every compose command that starts the guard rebuilds it" {
-    # There is no registry: the image is built from the Dockerfile. `docker
-    # compose up -d` reuses whatever image exists, so after a git pull it starts
-    # the old code and reports success - an update that silently did not happen,
-    # on the program whose job is to notice things.
+    # There is no registry: the image is built from the Dockerfile in the
+    # checkout. `docker compose up -d` reuses whatever image exists, so after a
+    # git pull it starts the old code and reports success - an update that
+    # silently did not happen, on the program whose job is to notice things.
+    #
+    # Scoped to the setup, which is the part that follows a pull. A one-shot
+    # `run` afterwards is working against an image that is already current, and
+    # rebuilding on every `accept` would be a slow answer to a question nobody
+    # asked.
+    setup_block=$(sed -n '/^### Or as a container/,/^### What goes in each setting/p' "$REPO/README.md")
     while IFS= read -r line; do
         case "$line" in
             *" up "*|*" run "*) ;;
-            *) continue ;;                  # exec and down need no image built
+            *) continue ;;
         esac
         [[ "$line" == *--build* ]] \
-            || { echo "compose command without --build: $line"; false; }
-    done < <(grep -oE 'docker compose [a-z]+ [^`]*' "$REPO/README.md")
+            || { echo "setup compose command without --build: $line"; false; }
+    done < <(printf '%s\n' "$setup_block" | grep -oE 'docker compose [a-z]+ [^`]*')
+
+    # Anywhere at all, an `up` starts the long-running thing and must be current.
+    while IFS= read -r line; do
+        [[ "$line" == *--build* ]] \
+            || { echo "compose up without --build: $line"; false; }
+    done < <(grep -oE 'docker compose up [^`]*' "$REPO/README.md")
 }
 
 # --- branding -----------------------------------------------------------------
@@ -1246,4 +1258,43 @@ PORT tcp 0.0.0.0:4444" 0
     stub_ssh "FILE bbb /etc/mine" 0
     run_watch check
     [[ "$(curl_log)" == *"watched path changed"* ]]
+}
+
+# --- running one command in a container ---------------------------------------
+
+@test "the entrypoint runs a single command when given arguments" {
+    # `docker compose run SERVICE CMD` replaces the command and keeps the
+    # entrypoint. So `run --rm dejima-guard trust-host` arrives at the loop as
+    # an argument, and a loop that ignored its arguments started checking every
+    # fifteen minutes instead - in a container the operator had to interrupt,
+    # while waiting for a fingerprint that was never going to print.
+    # Timed out, because the bug being guarded against is an infinite loop:
+    # without the timeout a regression hangs the suite rather than failing it.
+    run timeout 5 env DEJIMA_GUARD_BIN=/bin/echo "$REPO/bin/dejima-guard-loop" trust-host
+    [ "$status" -eq 0 ]
+    [ "$output" = "trust-host" ]
+    [[ "$output" != *"every"* ]]
+}
+
+@test "the entrypoint still loops when given nothing" {
+    # The timer is the default, and this is the half a container deployment
+    # depends on.
+    run timeout 2 env DEJIMA_GUARD_INTERVAL=60 DEJIMA_GUARD_BIN=/bin/true \
+        "$REPO/bin/dejima-guard-loop"
+    [[ "$output" == *"every 60s"* ]]
+}
+
+@test "the setup does not name the binary twice after run" {
+    # The entrypoint is already the guard, so repeating the name passes it to
+    # itself as an argument.
+    ! grep -q 'compose run .*dejima-guard dejima-guard' "$REPO/README.md"
+}
+
+@test "the container form of every command is documented" {
+    # There is no dejima-guard on a container host. The bare names in Use are
+    # the host path, and running them on a compose deployment finds nothing, or
+    # finds a second deployment with its own baseline.
+    grep -q 'docker compose exec dejima-guard dejima-guard' "$REPO/README.md"
+    grep -q 'docker compose run --rm dejima-guard' "$REPO/README.md"
+    grep -qi 'no .dejima-guard. on the host' "$REPO/README.md"
 }
