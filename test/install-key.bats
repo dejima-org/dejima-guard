@@ -11,9 +11,17 @@
 # key is live. So this program exists, and what it has to get right is that the
 # line it writes carries the forced command, every time.
 #
-# `ssh` is stubbed with something that runs the remote script locally, so what
-# is under test is the script this sends rather than whether this machine can
-# reach a devbox.
+# `ssh` is stubbed with a devbox: it runs the install script locally, and answers
+# the four verification commands the way a box with the forced command in place
+# answers them - two that work, two refused on stderr with exit 64.
+#
+# THE EXIT STATUS IS THE POINT. The stub this replaced did `shift; exec bash -c
+# "$1"`, which for the verification calls handed bash the key's path rather than
+# the command, so all four checks ran garbage and the phase was never tested at
+# all. Two bugs shipped through it, both of which a stub that relayed a status
+# would have caught: the missing IdentitiesOnly, and a `| grep -q refused`
+# pipeline that under pipefail returned the refusal's own exit 64 and so read a
+# working restriction as an absent one.
 
 setup() {
     REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
@@ -21,7 +29,20 @@ setup() {
     export HOME="$BATS_TEST_TMPDIR/home"
     STUB="$BATS_TEST_TMPDIR/bin"
     mkdir -p "$HOME" "$STUB"
-    printf '#!/bin/bash\nshift\nexec bash -c "$1"\n' > "$STUB/ssh"
+    cat > "$STUB/ssh" <<'STUBEOF'
+#!/bin/bash
+cmd="${!#}"                       # last argument, whatever options preceded it
+case "$cmd" in
+    *authorized_keys*)            # the install script, which this runs for real
+        exec bash -c "$cmd" ;;
+    "dejima-devbox-audit reach")
+        echo "PASS"; exit 0 ;;
+    "dejima-devbox-audit drift --state")
+        echo "FILE /etc/ssh/sshd_config a1b2"; exit 0 ;;
+    *)                            # dejima-guard-shell, verbatim
+        echo "dejima-guard-shell: refused: $cmd" >&2; exit 64 ;;
+esac
+STUBEOF
     chmod +x "$STUB/ssh"
     ssh-keygen -q -t ed25519 -N '' -f "$BATS_TEST_TMPDIR/k" -C guard
     PUB="$BATS_TEST_TMPDIR/k.pub"
@@ -80,6 +101,39 @@ authk() { cat "$HOME/.ssh/authorized_keys" 2>/dev/null || true; }
     [ "$status" -ne 0 ]
     [[ "$output" == *"does not look like a public key"* ]]
     [ ! -e "$HOME/.ssh/authorized_keys" ]
+}
+
+@test "a devbox with the restriction in force passes all four checks" {
+    # The end-to-end shape, against a stub that answers exactly as the real
+    # forced command does. This failed on a correctly restricted devbox: the
+    # refusal's exit 64 came back through the pipeline and outvoted grep's
+    # match, so both refusals were reported as the restriction being absent.
+    run_install
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"permitted   dejima-devbox-audit reach"* ]]
+    [[ "$output" == *"permitted   dejima-devbox-audit drift --state"* ]]
+    [[ "$output" == *"refused     cat /etc/shadow"* ]]
+    [[ "$output" == *"refused     dejima-devbox-audit drift --accept"* ]]
+    [[ "$output" != *"NOT REFUSED"* ]]
+}
+
+@test "a devbox that runs what it should refuse fails the check" {
+    # The direction that matters. A stub with no forced command answers
+    # everything successfully, and this must not call that restricted.
+    printf '#!/bin/bash\ncmd="${!#}"\ncase "$cmd" in *authorized_keys*) exec bash -c "$cmd";; esac\nexit 0\n' > "$STUB/ssh"
+    chmod +x "$STUB/ssh"
+    run_install
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"NOT REFUSED"* ]]
+}
+
+@test "a check that fails shows what came back, not only its conclusion" {
+    # This reported a working restriction as missing for one release, and the
+    # evidence it was wrong was in output it had captured and thrown away.
+    printf '#!/bin/bash\ncmd="${!#}"\ncase "$cmd" in *authorized_keys*) exec bash -c "$cmd";; esac\necho "root:x:0:0"\nexit 0\n' > "$STUB/ssh"
+    chmod +x "$STUB/ssh"
+    run_install
+    [[ "$output" == *"root:x:0:0"* ]]
 }
 
 @test "the verification offers only the guard's key" {

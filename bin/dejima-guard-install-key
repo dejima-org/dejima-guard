@@ -151,11 +151,31 @@ for c in "dejima-devbox-audit reach" "dejima-devbox-audit drift --state"; do
         fails=1
     fi
 done
+
+# Captured, not piped. `sshg "$c" | grep -q refused` looks right and is not:
+# under `set -o pipefail` the pipeline takes the rightmost NON-ZERO status, and
+# a refusal is exit 64 relayed through ssh - so grep matched, the pipeline still
+# came back 64, and a working restriction was reported as absent. The louder
+# direction of that mistake, but a false alarm about the one control standing
+# between a stolen key and this box is not a cheap one to raise.
+#
+# Both halves of the refusal are checked: the message, which is what the runbook
+# tells an operator to look for, and a non-zero status. `cat /etc/shadow` on an
+# unrestricted key fails too - with "Permission denied" and no "refused" - so
+# neither alone separates a refusal from an ordinary failure.
 for c in "cat /etc/shadow" "dejima-devbox-audit drift --accept"; do
-    if sshg "$c" | grep -q refused; then
+    out=""; rc=0
+    out=$(sshg "$c") || rc=$?
+    if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q refused; then
         say "  refused     $c"
     else
         say "  NOT REFUSED $c"
+        # What came back, rather than only the conclusion drawn from it. This
+        # check reported a working restriction as missing for one release, and
+        # the evidence that it was wrong was in the output it had already
+        # captured and discarded.
+        say "              the devbox said, exit $rc:"
+        printf '%s\n' "${out:-<nothing>}" | sed 's/^/                > /' >&2
         say "              The forced command is not in force for this key."
         say "              Check the line in ~/.ssh/authorized_keys on the"
         say "              devbox begins command=\"$SHELL_PATH\", and that"
