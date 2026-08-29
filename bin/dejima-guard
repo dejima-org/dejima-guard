@@ -65,14 +65,44 @@ cfg() {  # cfg KEY [DEFAULT]
 # The same restriction dejima puts on its own notify URL, for the same reason:
 # curl reads a leading -K/path as an option that takes the request from a file,
 # so a value without an explicit scheme is refused rather than guessed at.
+#
+# THE CHARACTER SET IS RFC 3986's, not a shorter list that looked sufficient.
+# The shorter list omitted "&", which every URL with two query parameters has -
+# including the push URL Uptime Kuma hands out, which is the one heartbeat_url
+# is documented to hold. So the setting this project recommends was rejected by
+# the project that recommends it.
+#
+# Refusing a legitimate URL is not the safe direction here. It costs the
+# heartbeat, and the heartbeat is the one signal a compromised devbox cannot
+# suppress - so an over-strict rule quietly removes the control that does not
+# depend on the watched machine cooperating.
 check_url() {  # check_url NAME VALUE
+    local bad
     case "$2" in
         http://*|https://*) ;;
         *) die "$1 must start with http:// or https:// - got '$2'" ;;
     esac
+
+    # Whitespace and control characters first, and separately, because the test
+    # below cannot see a trailing one: command substitution strips trailing
+    # newlines, so a value ending in one leaves an empty result and reads as
+    # clean. A newline is also the character worth being surest about, being the
+    # one that turns a single argument into two lines of something.
     case "$2" in
-        *[!A-Za-z0-9:/._~?=%@+-]*) die "$1 contains a character that is not allowed here" ;;
+        *[[:space:]]*)  die "$1 contains whitespace" ;;
+        *[[:cntrl:]]*)  die "$1 contains a control character" ;;
     esac
+
+    # Deleting the permitted characters leaves the offending ones, which is what
+    # the operator needs. Naming neither the character nor the setting's value
+    # left "contains a character that is not allowed here" as the whole of the
+    # report, and finding which one meant guessing.
+    #
+    # unreserved, gen-delims, sub-delims and % - everything a URI may contain.
+    # What remains banned is what cannot appear in one anyway: whitespace,
+    # control characters, quotes, backslash, and < > ^ ` { | }.
+    bad=$(printf '%s' "$2" | tr -d "A-Za-z0-9:/?#@[]!\$&'()*+,;=._~%-")
+    [ -z "$bad" ] || die "$1 contains characters that cannot appear in a URL: $bad"
 }
 
 # --- reaching the devbox ----------------------------------------------------

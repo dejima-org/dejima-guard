@@ -99,7 +99,12 @@ ntfy_url = https://ntfy.example.invalid/devbox-alerts
 # itself, which is why the line is here rather than left to be discovered.
 #
 # Anything speaking the same "GET this URL to say you are alive" shape works.
-heartbeat_url = https://kuma.example.invalid/api/push/abcdef
+#
+# Copied whole, including the query Uptime Kuma appends. An example trimmed to
+# the path is shorter and is not what you will paste, and the shorter one hid a
+# bug: the URL check refused "&", so the real thing was rejected while this
+# example passed.
+heartbeat_url = https://kuma.example.invalid/api/push/abcdef?status=up&msg=OK&ping=
 
 # ===========================================================================
 # IF YOU ALERT THROUGH SOMETHING ELSE
