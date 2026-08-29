@@ -55,10 +55,15 @@ services:
 
       # --- the dead-man's switch ------------------------------------------
       #
-      # GET after a cycle that completed clean - an Uptime Kuma push monitor
-      # is the documented shape. Without it, a guard that dies looks exactly
-      # like a guard with nothing to report.
-      DEJIMA_GUARD_HEARTBEAT_URL: https://kuma.example.invalid/api/push/abcdef
+      # NOT HERE. heartbeat_url goes in the mounted config beside ntfy_token,
+      # because an Uptime Kuma push URL carries its token in the path: the URL
+      # is the credential rather than the destination. `docker inspect` shows
+      # everything in this block, and so does anything that can read /proc.
+      #
+      # What it grants is worth being plain about. Anyone holding that URL can
+      # tell Kuma this guard is healthy, which suppresses the one signal that
+      # reports a guard that has died - the single channel a compromised devbox
+      # cannot reach.
 
       # --- this container --------------------------------------------------
       #

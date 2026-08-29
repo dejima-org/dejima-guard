@@ -167,10 +167,18 @@ token.
 
 ```
 ntfy_token = <the token, from your ntfy server>
+heartbeat_url = <the Push URL Uptime Kuma gave you>
 ```
 
-An ntfy needing no token can have this empty, but it must exist: compose will
-not start with a secret it cannot find.
+**Both of these are credentials, which is why neither is in the compose file.**
+The token is obvious. The push URL is less so: it carries its token in the path,
+and anyone holding it can tell Kuma this guard is healthy, which suppresses the
+one signal that reports a guard that has died. Everything in a compose
+`environment:` block shows up in `docker inspect` and to anything that can read
+`/proc`.
+
+An ntfy needing no token can leave that line out, but the file must exist:
+compose will not start with a secret it cannot find.
 
 ```sh
 chmod 600 secrets/guard_key secrets/config
@@ -234,7 +242,7 @@ other end of the connection, not the machine the guard runs on.
 | --- | --- |
 | `ntfy_url` | The topic to publish to. **Its own**, not the one dejima pushes to: that URL lives on the devbox, so root there could drown it or forge an all-clear |
 | `ntfy_token` | Write access to that topic and nothing else. The reason the config file is `0640` |
-| `heartbeat_url` | GET after a cycle that completed clean. An Uptime Kuma push monitor |
+| `heartbeat_url` | GET after a cycle that completed clean. An Uptime Kuma push monitor. **A credential**: the token is in the path, so it belongs in the config file rather than the environment |
 | `alert_command` | An alternative to ntfy: gets the title and body on stdin |
 
 `etc/config.example` carries the same reference with the reasoning attached.

@@ -99,6 +99,12 @@ ntfy_url = https://ntfy.example.invalid/devbox-alerts
 
 # A URL to GET after a cycle that completed and found nothing wrong.
 #
+# A CREDENTIAL, not just a destination: an Uptime Kuma push URL carries its
+# token in the path. Anyone holding it can tell Kuma this guard is healthy,
+# which suppresses the one signal that reports a guard that has died. Keep it
+# here rather than in a compose environment block, which `docker inspect`
+# prints.
+#
 # An Uptime Kuma push monitor is the documented shape: it expects a ping on a
 # cadence and alerts when one does not arrive. That is exactly what is wanted
 # here, because this program is pinged only on a clean cycle - so silence from
