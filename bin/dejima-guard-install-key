@@ -125,7 +125,17 @@ fi
 say ""
 say "Checking what that key can do."
 GKEY="${PUB%.pub}"
-sshg() { ssh -i "$GKEY" -o BatchMode=yes -o ConnectTimeout=10 "$TARGET" "$1" 2>&1; }
+# IdentitiesOnly, or this checks the wrong key.
+#
+# `-i` adds a key to those offered rather than restricting to it, so with the
+# operator's own key present - or an agent holding one - ssh authenticates with
+# that, no forced command applies, and all four checks report the restriction
+# missing when it is fine. Which is what happened the first time this ran
+# against a real devbox.
+sshg() {
+    ssh -i "$GKEY" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 \
+        "$TARGET" "$1" 2>&1
+}
 
 fails=0
 for c in "dejima-devbox-audit reach" "dejima-devbox-audit drift --state"; do
@@ -144,8 +154,12 @@ for c in "cat /etc/shadow" "dejima-devbox-audit drift --accept"; do
         say "  refused     $c"
     else
         say "  NOT REFUSED $c"
-        say "              The forced command is not in force. Do not leave"
-        say "              this key installed until it is."
+        say "              The forced command is not in force for this key."
+        say "              Check the line in ~/.ssh/authorized_keys on the"
+        say "              devbox begins command=\"$SHELL_PATH\", and that"
+        say "              there is not a SECOND, unrestricted entry for the"
+        say "              same key above it - first match wins."
+        say "              Do not leave this key installed until it is."
         fails=1
     fi
 done

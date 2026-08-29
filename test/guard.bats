@@ -308,6 +308,36 @@ EOF
     grep -q 'UserKnownHostsFile=/var/lib/dejima-guard/known_hosts' "$DEJIMA_GUARD_STATE/ssh.log"
 }
 
+@test "only the configured key is offered" {
+    # `-i` ADDS a key rather than restricting to it. Without IdentitiesOnly,
+    # ssh can authenticate with the operator's own key - or one in an agent -
+    # and the forced command attached to the guard's key never applies. The
+    # guard works, the alerts arrive, and the restriction protects nothing.
+    #
+    # Found on a real devbox, by the installer's check, which had the same bug.
+    cat > "$STUB/ssh" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$DEJIMA_GUARD_STATE/ssh.log"
+case "$*" in *"drift --state"*) echo "FILE aaa /etc/one" ;; esac
+EOF
+    chmod +x "$STUB/ssh"
+    DEJIMA_GUARD_SSH_KEY=/var/lib/dejima-guard/id_ed25519 run_watch check
+    grep -q 'IdentitiesOnly=yes' "$DEJIMA_GUARD_STATE/ssh.log"
+}
+
+@test "no key configured does not force IdentitiesOnly" {
+    # With no -i there is nothing to restrict to, and setting it would refuse
+    # every identity the operator has arranged by other means.
+    cat > "$STUB/ssh" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$DEJIMA_GUARD_STATE/ssh.log"
+case "$*" in *"drift --state"*) echo "FILE aaa /etc/one" ;; esac
+EOF
+    chmod +x "$STUB/ssh"
+    run_watch check
+    ! grep -q 'IdentitiesOnly' "$DEJIMA_GUARD_STATE/ssh.log"
+}
+
 @test "no known_hosts configured leaves ssh to its own default" {
     # On a systemd host ~/.ssh/known_hosts is the right answer and naming one
     # would override something already correct.
