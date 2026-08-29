@@ -23,8 +23,10 @@ RUN apt-get update \
 RUN useradd --system --create-home --home-dir /var/lib/dejima-guard \
             --shell /usr/sbin/nologin --uid 10001 guard
 
-COPY bin/dejima-guard bin/dejima-guard-loop /usr/local/bin/
-RUN chmod 0755 /usr/local/bin/dejima-guard /usr/local/bin/dejima-guard-loop
+COPY bin/dejima-guard bin/dejima-guard-loop bin/dejima-guard-install-key /usr/local/bin/
+RUN chmod 0755 /usr/local/bin/dejima-guard \
+                /usr/local/bin/dejima-guard-loop \
+                /usr/local/bin/dejima-guard-install-key
 
 # The baseline and the report live here, and so does known_hosts. All three
 # have to outlive the container: a baseline that resets on every deploy
