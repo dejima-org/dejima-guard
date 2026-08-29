@@ -426,3 +426,146 @@ devbox_user = tester\nntfy_url = ntfy.example.invalid/x\n' > "$DEJIMA_GUARD_CONF
     [ "$status" -ne 0 ]
     [[ "$output" == *"no devbox_host"* ]]
 }
+
+# --- naming ------------------------------------------------------------------
+#
+# "The watcher could not collect from the devbox" names neither machine. An
+# operator watching two boxes cannot tell the pushes apart, and on a phone at
+# 3am "the devbox" is not a hostname.
+
+@test "an alert names the watched host rather than saying devbox" {
+    stub_ssh "" 0 255
+    run_watch check
+    [[ "$(curl_log)" == *"Title: devbox: unreachable"* ]]
+    [[ "$(curl_log)" != *"Title: devbox unreachable"* ]]
+}
+
+@test "the alert body names the guard and the full host" {
+    stub_ssh "" 0 255
+    run_watch check
+    [[ "$(curl_log)" == *"dejima-guard could not collect from devbox.example.invalid"* ]]
+    [[ "$(curl_log)" != *"The watcher"* ]]
+}
+
+@test "the title uses the short name, which is what a lock screen shows" {
+    # A fully qualified name in a title pushes the finding off the end of the
+    # line, leaving a push that says only which machine, never what.
+    stub_ssh "FILE /etc/passwd aaaa" 0
+    run_watch check                    # first run takes the baseline
+    stub_ssh "FILE /etc/passwd bbbb" 0
+    run_watch check
+    [[ "$(curl_log)" == *"Title: devbox: unexplained changes"* ]]
+    [[ "$(curl_log)" != *"Title: devbox.example.invalid:"* ]]
+}
+
+# --- the reason a collection failed -------------------------------------------
+
+@test "a failed collection reports what ssh said, locally" {
+    # The reason used to go to /dev/null and the alert offered three guesses
+    # instead - on the one failure that stops this program working at all.
+    cat > "$STUB/ssh" <<'SSHEOF'
+#!/bin/sh
+echo "Host key verification failed." >&2
+exit 255
+SSHEOF
+    chmod +x "$STUB/ssh"
+    run_watch check
+    [[ "$output" == *"Host key verification failed"* ]]
+}
+
+@test "a host key failure names the command that fixes it" {
+    # It is not "the box is down", it never recovers on its own, and it is the
+    # expected state of a fresh container. Every cycle would alert at max
+    # priority until the topic is muted.
+    cat > "$STUB/ssh" <<'SSHEOF'
+#!/bin/sh
+echo "Host key verification failed." >&2
+exit 255
+SSHEOF
+    chmod +x "$STUB/ssh"
+    run_watch check
+    [[ "$output" == *"trust-host"* ]]
+}
+
+@test "ssh's words stay off the phone" {
+    # The one string near an alert that the far end has any say in.
+    cat > "$STUB/ssh" <<'SSHEOF'
+#!/bin/sh
+echo "Host key verification failed." >&2
+exit 255
+SSHEOF
+    chmod +x "$STUB/ssh"
+    run_watch check
+    [[ "$(curl_log)" != *"Host key verification"* ]]
+}
+
+# --- trust-host ---------------------------------------------------------------
+#
+# Without it the guard cannot connect at all: StrictHostKeyChecking is on by
+# design and BatchMode turns its prompt into a failure, so an empty known_hosts
+# reports the host unreachable at max priority on every cycle, forever. Nothing
+# in this repository wrote that file - the comment explaining where it should
+# live was the whole of the provision for it.
+
+# Real keys, not plausible-looking strings. A blob ssh-keygen cannot read
+# exercises a different path than a host key does, and the difference was a
+# genuine bug: fingerprinting failed at the head of a pipeline and took the
+# whole command down with it under pipefail.
+stub_keyscan() {  # stub_keyscan NAME
+    local f="$BATS_TEST_TMPDIR/hk_$1"
+    [ -f "$f.pub" ] || ssh-keygen -q -t ed25519 -N '' -f "$f" -C "$1"
+    printf '#!/bin/sh\nprintf "%%s %%s\\n" devbox.example.invalid "%s"\n' \
+        "$(awk '{print $1, $2}' "$f.pub")" > "$STUB/ssh-keyscan"
+    chmod +x "$STUB/ssh-keyscan"
+}
+keyline() { awk '{print $1, $2}' "$BATS_TEST_TMPDIR/hk_$1.pub"; }
+
+@test "trust-host records the host key, so a first check can connect" {
+    export DEJIMA_GUARD_SSH_KNOWN_HOSTS="$BATS_TEST_TMPDIR/lib/known_hosts"
+    stub_keyscan real
+    run_watch trust-host
+    [ "$status" -eq 0 ]
+    grep -q 'devbox.example.invalid ssh-ed25519' "$DEJIMA_GUARD_SSH_KNOWN_HOSTS"
+}
+
+@test "trust-host says plainly that nothing verified the key" {
+    # It is trust on first use. An operator who thinks it was checked has been
+    # misled by the tool rather than by their own assumption.
+    export DEJIMA_GUARD_SSH_KNOWN_HOSTS="$BATS_TEST_TMPDIR/lib/known_hosts"
+    stub_keyscan real
+    run_watch trust-host
+    [[ "$output" == *"NOT VERIFIED"* ]]
+}
+
+@test "trust-host refuses to overwrite a key that has changed" {
+    # A changed host key is either a rebuild or the thing this program exists to
+    # notice. Quietly replacing it would erase the distinction.
+    export DEJIMA_GUARD_SSH_KNOWN_HOSTS="$BATS_TEST_TMPDIR/lib/known_hosts"
+    stub_keyscan old
+    printf 'devbox.example.invalid %s\n' "$(keyline old)" \
+        > "$DEJIMA_GUARD_SSH_KNOWN_HOSTS"
+    old_blob=$(awk '{print $3}' "$DEJIMA_GUARD_SSH_KNOWN_HOSTS")
+    stub_keyscan new
+    run_watch trust-host
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"DIFFERENT KEY"* ]]
+    grep -qF "$old_blob" "$DEJIMA_GUARD_SSH_KNOWN_HOSTS"
+    [ "$(grep -c . "$DEJIMA_GUARD_SSH_KNOWN_HOSTS")" -eq 1 ]
+}
+
+@test "trust-host run twice does not append a second copy" {
+    export DEJIMA_GUARD_SSH_KNOWN_HOSTS="$BATS_TEST_TMPDIR/lib/known_hosts"
+    stub_keyscan real
+    run_watch trust-host
+    run_watch trust-host
+    [ "$status" -eq 0 ]
+    [ "$(grep -c . "$DEJIMA_GUARD_SSH_KNOWN_HOSTS")" -eq 1 ]
+}
+
+@test "a wrong --fingerprint writes nothing at all" {
+    export DEJIMA_GUARD_SSH_KNOWN_HOSTS="$BATS_TEST_TMPDIR/lib/known_hosts"
+    stub_keyscan real
+    run_watch trust-host --fingerprint SHA256:definitelynotthisone
+    [ "$status" -ne 0 ]
+    [ ! -s "$DEJIMA_GUARD_SSH_KNOWN_HOSTS" ]
+}

@@ -59,7 +59,19 @@ sudo ssh-keygen -t ed25519 -N '' -f /var/lib/dejima-guard/id_ed25519
 sudo cat /var/lib/dejima-guard/id_ed25519.pub
 ```
 
-`etc/config.example` has the `authorized_keys` line to pair it with. Then:
+`etc/config.example` has the `authorized_keys` line to pair it with. Then record
+the devbox's host key, which nothing else does and every other command needs:
+
+```sh
+sudo dejima-guard trust-host
+```
+
+`StrictHostKeyChecking` is left on, deliberately, and batch mode turns its
+prompt into a failure — so until this is run, every cycle reports the devbox
+unreachable at max priority. Compare the fingerprint it prints against
+`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the devbox, or pass
+`--fingerprint SHA256:...` and have it refuse to write anything that does not
+match. Then:
 
 ```sh
 sudo dejima-guard check     # first run records the baseline, alerts nothing
@@ -102,10 +114,24 @@ key is live; this writes the restricted line in a single append.
 
 It needs `dejima-guard-shell` on the devbox and a sudoers rule permitting the
 two audit commands — both from
-[dejima-devbox-hardener §7](https://gitbox.branderson.io/dejima/dejima-devbox-hardener/src/branch/main/docs/building-a-devbox.md).
+["Let the guard in"](https://gitbox.branderson.io/dejima/dejima-devbox-hardener/src/branch/main/docs/building-a-devbox.md#guard-access).
 If either is missing the check above says which.
 
-**3. Write the secret config.** This is the one file that is not a copy of
+**3. Record the devbox's host key.** In a container this matters more, not
+less: the volume starts empty, and without it every cycle alerts that the
+devbox is unreachable.
+
+```sh
+docker compose run --rm dejima-guard dejima-guard trust-host
+```
+
+It prints the fingerprint before writing it. Compare that against
+`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` run on the devbox itself, or
+pass `--fingerprint SHA256:...` so it refuses to write anything else. It will
+not replace a key it already has: a host key that changed is either a rebuild
+or the thing this program exists to notice, and that is not a helper's call.
+
+**4. Write the secret config.** This is the one file that is not a copy of
 anything: create `secrets/config` and put in it whatever must not be in the
 environment — on a self-hosted ntfy with access control, that is the token.
 
@@ -120,7 +146,7 @@ compose will refuse to start with a secret it cannot find.
 chmod 600 secrets/guard_key secrets/config
 ```
 
-**4. Start it, then prove the alert path works.**
+**5. Start it, then prove the alert path works.**
 
 ```sh
 docker compose up -d
@@ -188,7 +214,7 @@ other end of the connection, not the machine the guard runs on.
 | `devbox_host` | The devbox's hostname or address, as this machine reaches it |
 | `devbox_user` | The account **on the devbox** to log in as. Not root, and no default — the devbox runbook builds a machine with no root password, so the guard connects as an ordinary account and elevates for two commands |
 | `ssh_key` | The private key **on this machine**. Its own, not a general-purpose administrative one |
-| `ssh_known_hosts` | Where the devbox's host key is remembered. Must persist — in a container, on the state volume |
+| `ssh_known_hosts` | Where the devbox's host key is remembered. Must persist — in a container, on the state volume. Populated by `dejima-guard trust-host`, never automatically |
 | `ssh_timeout` | Seconds to wait. The line between a slow devbox and a gone one |
 
 **Where alerts go.**
@@ -274,6 +300,7 @@ dejima-guard check       # what the timer runs
 dejima-guard report      # the last cycle's detail
 dejima-guard accept      # record the devbox's current state as the baseline
 dejima-guard test-alert  # publish a test alert, then go and look
+dejima-guard trust-host  # record the devbox's host key; run once, before check
 
 dejima-guard-install-key # put the guard's key on a devbox, restricted
 ```

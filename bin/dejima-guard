@@ -122,6 +122,22 @@ ssh_devbox() {  # ssh_devbox COMMAND...
     ssh $opts ${key:+-i "$key"} "$user@$host" "$@"
 }
 
+# The watched host's own name, for alerts that would otherwise say "the devbox".
+#
+# An operator watching more than one box gets pushes that are indistinguishable
+# without this, and "the devbox" on a phone at 3am names nothing at all.
+#
+# SAFE TO INTERPOLATE, unlike almost everything else near an alert body: this
+# comes from the guard's own config file, on this machine. It is not something
+# the watched host said. That distinction is the whole rule, not the word
+# "hostname".
+#
+# The short form for titles, which a lock screen truncates - a fully qualified
+# name eats the whole line and pushes the actual finding off the end. The full
+# one in bodies, where there is room to be unambiguous.
+target() { cfg devbox_host; }
+target_short() { local h; h=$(cfg devbox_host); printf '%s\n' "${h%%.*}"; }
+
 # --- alerting ---------------------------------------------------------------
 #
 # NOTHING THE DEVBOX CONTROLS REACHES THE PHONE. dejima draws this line for its
@@ -246,17 +262,41 @@ cmd_check() {
     require_config
     install -d -m 0750 "$STATE_DIR"
     now=$(mktemp) || die "no temp space"
-    # shellcheck disable=SC2064
-    trap "rm -f '$now' '$now.diff'" EXIT
 
     # 1. Can it be reached at all?
     #
     # Deliberately the first question. A devbox that does not answer is the
     # case a push reporter cannot report, and it is why this program pulls.
-    if ! state=$(ssh_devbox dejima-devbox-audit drift --state 2>/dev/null); then
-        alert max "devbox unreachable" \
-            "The watcher could not collect from the devbox. It may be down, off the network, or refusing this key." || true
-        say "FAIL: could not reach the devbox"
+    local ssh_err
+    ssh_err=$(mktemp) || die "no temp space"
+    # shellcheck disable=SC2064
+    trap "rm -f '$now' '$now.diff' '$ssh_err'" EXIT
+
+    # ssh's own words are kept, not sent to /dev/null. They were, and the alert
+    # offered three guesses instead - so the one failure that stops this program
+    # working at all arrived with the reason already thrown away.
+    #
+    # LOCALLY ONLY. This text is the one thing near an alert that the far end
+    # has any say in, so it goes to the log and the report on this machine and
+    # never into the push.
+    if ! state=$(ssh_devbox dejima-devbox-audit drift --state 2>"$ssh_err"); then
+        alert max "$(target_short): unreachable" \
+            "dejima-guard could not collect from $(target). It may be down, off the network, or refusing this key." || true
+        say "FAIL: could not reach $(target). ssh said:"
+        sed 's/^/  /' "$ssh_err" >&2
+
+        # Host key verification is not "the box is down", and the remedy is a
+        # command rather than an investigation. Untreated it is permanent: every
+        # cycle fails the same way at max priority, which is the false alarm that
+        # gets a topic muted. It is also the expected state of a fresh container,
+        # whose known_hosts starts empty.
+        if grep -q 'Host key verification failed' "$ssh_err"; then
+            say ""
+            say "  That is the host key, not the network. This guard has never"
+            say "  seen $(target)'s key, or has seen a different one."
+            say "    $PROG trust-host"
+            say "  which shows the fingerprint before writing it down."
+        fi
         return 1
     fi
 
@@ -265,8 +305,8 @@ cmd_check() {
     # passes -s - which had an audit that returned nothing read as a valid
     # state, and on a first run recorded it as the baseline.
     if [ -z "$state" ]; then
-        alert max "devbox returned nothing" \
-            "The audit ran and produced no state. That is not a clean box; it is a check that did not run." || true
+        alert max "$(target_short): audit returned nothing" \
+            "The audit on $(target) ran and produced no state. That is not a clean box; it is a check that did not run." || true
         say "FAIL: empty state"
         return 1
     fi
@@ -298,16 +338,16 @@ cmd_check() {
     # Not one per finding: an apt upgrade would otherwise arrive as forty
     # pushes, and the next real one lands in a topic already muted.
     if [ "$changed" = 1 ] && [ "$reach_rc" -ne 0 ]; then
-        alert max "devbox: changes and containment" \
-            "$body changed, and the containment check did not pass." || true
+        alert max "$(target_short): changes and containment" \
+            "On $(target): $body changed, and the containment check did not pass." || true
         rc=1
     elif [ "$changed" = 1 ]; then
-        alert high "devbox: unexplained changes" \
-            "$body changed since the last accepted state." || true
+        alert high "$(target_short): unexplained changes" \
+            "On $(target): $body changed since the last accepted state." || true
         rc=1
     elif [ "$reach_rc" -ne 0 ]; then
-        alert high "devbox: containment" \
-            "Nothing changed on the box, but the containment check did not pass." || true
+        alert high "$(target_short): containment" \
+            "Nothing changed on $(target), but the containment check did not pass." || true
         rc=1
     fi
 
@@ -374,7 +414,7 @@ cmd_test_alert() {
     require_config
     say "Sending a test alert."
     if alert default "dejima-guard: test" \
-        "If this arrived, the alert path works. Nothing is wrong with the devbox."
+        "If this arrived, the alert path works. Nothing is wrong with $(target)."
     then
         say ""
         say "Sent. GO AND CHECK IT ARRIVED."
@@ -389,9 +429,124 @@ cmd_test_alert() {
 
 cmd_report() { [ -r "$LAST" ] && cat "$LAST" || say "no report yet - run $PROG check"; }
 
+# Records the devbox's host key, because nothing else here ever did.
+#
+# THIS WAS A HOLE, not a convenience. StrictHostKeyChecking is deliberately left
+# on, and BatchMode turns its prompt into a failure - so a guard whose
+# known_hosts is empty cannot connect at all, and reports "unreachable" at max
+# priority on every cycle forever. A fresh container is exactly that state. The
+# code said so in a comment and pointed known_hosts at a volume where it would
+# persist; nothing put anything in it. dejima-guard-install-key connects as the
+# operator and so uses the operator's own known_hosts, on a different account
+# and usually a different filesystem.
+#
+# It stays a separate command rather than something check does when it fails.
+# Learning a key automatically on the connection whose purpose is noticing that
+# machine changed would defeat the check it is meant to support.
+cmd_trust_host() {
+    local host known keys existing want=""
+    [ "${1:-}" = "--fingerprint" ] && { want="${2:?--fingerprint needs a value}"; }
+    host=$(target); [ -n "$host" ] || die "no devbox_host in $CONF"
+    known=$(cfg ssh_known_hosts); [ -n "$known" ] \
+        || die "no ssh_known_hosts in $CONF - nowhere to write this"
+    command -v ssh-keyscan >/dev/null || die "ssh-keyscan is not installed here"
+
+    install -d -m 0750 "$(dirname "$known")"
+    keys=$(ssh-keyscan -T 10 "$host" 2>/dev/null) \
+        || die "could not fetch a host key from $host"
+    [ -n "$keys" ] || die "$host offered no host key - is it up, and is 22 open from here?"
+
+    # An existing entry is never quietly replaced. If this host's key has
+    # changed, that is either a rebuild or the thing this whole program exists
+    # to notice, and neither is for a helper to decide.
+    existing=""
+    [ -s "$known" ] && existing=$(ssh-keygen -F "$host" -f "$known" 2>/dev/null | grep -v '^#' || true)
+    if [ -n "$existing" ]; then
+        # Every key already trusted must still be one this host offers. Set
+        # equality is the wrong test: ssh-keyscan returns every type the server
+        # supports, while known_hosts usually holds the one type ssh negotiated,
+        # so equality would call an unchanged host changed.
+        #
+        # Key material only, by position from the end. Both formats put the type
+        # and the blob last, which keeps this working for a hashed known_hosts
+        # where the first field is not a hostname at all.
+        blob() { awk 'NF>=3 {print $(NF-1), $NF}' | sort -u; }
+        local have want_set
+        have=$(printf '%s\n' "$existing" | blob)
+        want_set=$(printf '%s\n' "$keys" | blob)
+
+        # An entry that parsed as nothing is not an entry that matches. comm
+        # against an empty set returns empty, which reads identically to "every
+        # key already trusted is still offered" - so a malformed known_hosts
+        # line would report the host trusted and leave the guard unable to
+        # connect, with this command insisting there was nothing to do.
+        if [ -z "$have" ]; then
+            say "$known has an entry for $host that could not be read."
+            say "  Remove it and run this again:"
+            say "    ssh-keygen -R $host -f $known"
+            return 1
+        fi
+
+        if [ -z "$(comm -23 <(printf '%s\n' "$have") <(printf '%s\n' "$want_set"))" ]; then
+            say "$host is already trusted, with a key it is still offering."
+            return 0
+        fi
+        say "$host ALREADY HAS A DIFFERENT KEY in $known."
+        say ""
+        say "  Either that machine was rebuilt, or something is answering for it."
+        say "  This will not choose between those. If you know it was rebuilt:"
+        say "    ssh-keygen -R $host -f $known"
+        say "  and run this again."
+        return 1
+    fi
+
+    # Computed once, and its failure handled rather than inherited. Piping
+    # straight into sed put ssh-keygen's status at the head of a pipeline under
+    # `set -e` with pipefail, so a key it could not read killed this command
+    # outright: exit 255, no message, after the header and before the write.
+    local fprints=""
+    fprints=$(printf '%s\n' "$keys" | ssh-keygen -lf - 2>/dev/null) || fprints=""
+
+    if [ -n "$fprints" ]; then
+        say "$host offers:"
+        printf '%s\n' "$fprints" | sed 's/^/  /' >&2
+    else
+        say "$host answered, but ssh-keygen here could not fingerprint what it"
+        say "  sent. That is odd enough to look at before trusting it."
+        # Fails closed. A fingerprint that cannot be computed cannot be
+        # compared, and treating that as a pass would make --fingerprint a
+        # flag that verifies nothing in exactly the case it matters.
+        [ -n "$want" ] && { say "NOT WRITTEN: nothing to check your fingerprint against."; return 1; }
+    fi
+    say ""
+
+    if [ -n "$want" ]; then
+        if ! printf '%s\n' "$fprints" | awk '{print $2}' | grep -qxF "$want"; then
+            say "NOT WRITTEN: none of those match the fingerprint you gave."
+            say "  expected: $want"
+            return 1
+        fi
+        say "Matches the fingerprint you gave."
+    else
+        # Said plainly rather than implied. Without a fingerprint to check
+        # against, this trusts whatever answered - which is the same trust an
+        # operator extends by typing "yes" at a prompt, and worth naming as
+        # such rather than dressing up as verification.
+        say "NOT VERIFIED. Nothing was checked against this; whatever answered"
+        say "  is what gets written. On the devbox itself:"
+        say "    ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub"
+        say "  and compare, or re-run with --fingerprint SHA256:..."
+    fi
+
+    printf '%s\n' "$keys" >> "$known"
+    chmod 0640 "$known" 2>/dev/null || true
+    say ""
+    say "Written to $known. $PROG check should now reach $host."
+}
+
 usage() {
     cat >&2 <<USAGE
-usage: $PROG [check|accept|report|test-alert]
+usage: $PROG [check|accept|report|test-alert|trust-host]
 
   check       collect from the devbox, diff against the baseline held here,
               alert on any change or on containment failing, and send the
@@ -400,6 +555,9 @@ usage: $PROG [check|accept|report|test-alert]
   report      the last cycle's detail, which is deliberately not in the alert
   test-alert  publish a test alert, then go and check it arrived. Nothing
               else here exercises that path until it is needed
+  trust-host  record the devbox's SSH host key, which every other command
+              needs and nothing else writes. Run once, before the first check
+              [--fingerprint SHA256:...] to check it before writing it down
 USAGE
 }
 
@@ -408,6 +566,7 @@ case "${1:-check}" in
     accept)     cmd_accept ;;
     report)     cmd_report ;;
     test-alert) cmd_test_alert ;;
+    trust-host) shift; cmd_trust_host "$@" ;;
     -h|--help) usage ;;
     *) say "$PROG: unknown command: $1"; usage; exit 64 ;;
 esac

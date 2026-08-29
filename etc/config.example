@@ -49,6 +49,10 @@ ssh_key = /var/lib/dejima-guard/id_ed25519
 # volume rather than a home directory that is new every run - without it,
 # BatchMode turns the first connection into a failure and every collection
 # reports the devbox unreachable.
+#
+# `dejima-guard trust-host` writes it, and is the only thing that does. Run it
+# once before the first check. An empty file here is not a fresh start, it is a
+# guard that cannot connect at all.
 ssh_known_hosts = /var/lib/dejima-guard/known_hosts
 
 # Seconds to wait for the connection. A devbox that is slow is not a devbox
