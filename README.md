@@ -73,13 +73,49 @@ compromised machine records the compromise as normal and reports clean forever.
 
 ### Or as a container
 
+**1. Copy the example and edit it.** Every variable in it is commented with
+what goes in it.
+
 ```sh
-cp docker-compose.example.yml docker-compose.yml    # then edit it
-mkdir -p secrets && ssh-keygen -t ed25519 -N '' -f secrets/guard_key
-printf 'ntfy_token = tk_...\n' > secrets/config
-chmod 600 secrets/guard_key secrets/config
-docker compose up -d
+cp docker-compose.example.yml docker-compose.yml
+$EDITOR docker-compose.yml
 ```
+
+**2. Make a key for the guard**, whose public half goes on the devbox.
+
+```sh
+mkdir -p secrets
+ssh-keygen -t ed25519 -N '' -f secrets/guard_key -C dejima-guard
+```
+
+**3. Write the secret config.** This is the one file that is not a copy of
+anything: create `secrets/config` and put in it whatever must not be in the
+environment — on a self-hosted ntfy with access control, that is the token.
+
+```
+ntfy_token = <the token, from your ntfy server>
+```
+
+If your ntfy needs no token, the file can be empty, but it still has to exist:
+compose will refuse to start with a secret it cannot find.
+
+```sh
+chmod 600 secrets/guard_key secrets/config
+```
+
+**4. Start it, then prove the alert path works.**
+
+```sh
+docker compose up -d
+docker compose exec dejima-guard dejima-guard test-alert
+```
+
+**Go and check that alert arrived on your phone.** Nothing else exercises that
+path: a clean cycle never publishes, so a wrong token or a wrong topic sits
+undiscovered until the first real finding — and then takes it with it. The
+guard suppresses its heartbeat when a send fails, so a broken channel
+eventually shows up as a dead guard, but the first time you find that out
+should be now and not then.
 
 **A copy, not an override.** `docker compose up` reads `docker-compose.yml` and
 `docker-compose.override.yml` together and merges them, so overriding the
@@ -203,6 +239,12 @@ minutes to notice the monitoring and scrub, and the resulting gap is evidence.
   not be a rewrite.
 - **It does not watch itself.** That is what the heartbeat is for, and the thing
   receiving it is outside this program.
+- **It cannot tell you its alerts are arriving.** Sent is not received. A
+  clean cycle never publishes, so a broken token or topic waits until the
+  first real finding. What it does do is suppress the heartbeat when a send
+  fails, so a broken channel surfaces as a dead guard rather than as silence —
+  and `test-alert` exists so you can settle it deliberately rather than find
+  out.
 - **It sends no detail.** Alert bodies carry counts and categories, never a
   filename or a unit name. A compromised devbox controls those strings, and
   interpolating one into a push hands it a channel to your phone. The detail is
@@ -211,9 +253,10 @@ minutes to notice the monitoring and scrub, and the resulting gap is evidence.
 ## Use
 
 ```sh
-dejima-guard check      # what the timer runs
-dejima-guard report     # the last cycle's detail
-dejima-guard accept     # record the devbox's current state as the baseline
+dejima-guard check       # what the timer runs
+dejima-guard report      # the last cycle's detail
+dejima-guard accept      # record the devbox's current state as the baseline
+dejima-guard test-alert  # publish a test alert, then go and look
 ```
 
 `accept` is a decision, which is why a check never makes it. After an `apt

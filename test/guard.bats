@@ -177,6 +177,84 @@ FILE bbb /etc/evil-http-backdoor" 0
     [[ "$(curl_log)" == *"Priority: max"* ]]
 }
 
+# --- an alert that does not arrive ------------------------------------------
+
+@test "a failed send is reported, not swallowed" {
+    # Every call site used to end in `|| true`, so a wrong token produced
+    # exactly nothing: drift found, ALERTED printed, no alert in existence.
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch check
+    printf '#!/bin/sh\nexit 22\n' > "$STUB/curl"; chmod +x "$STUB/curl"
+    stub_ssh "FILE bbb /etc/two" 0
+    run_watch check
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"ALERT NOT SENT"* ]]
+}
+
+@test "a failed send suppresses the heartbeat" {
+    # THE POINT OF THE ABOVE. A guard that has found something and cannot say
+    # so is, practically, a guard that is not running - and the only channel
+    # left that can report it is the one that reports silence. Heartbeating
+    # here tells the dead-man's switch all is well on the single cycle where
+    # that is least true.
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch check
+    cat > "$STUB/curl" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$DEJIMA_GUARD_STATE/curl.log"
+case "$*" in *kuma*) exit 0 ;; *) exit 22 ;; esac
+EOF
+    chmod +x "$STUB/curl"
+    : > "$DEJIMA_GUARD_STATE/curl.log"
+    stub_ssh "FILE bbb /etc/two" 0
+    run_watch check
+    [ "$(heartbeats)" = 0 ]
+}
+
+@test "the detail is still written when the alert could not be sent" {
+    # It is the only surviving record of a finding nobody was told about.
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch check
+    printf '#!/bin/sh\nexit 22\n' > "$STUB/curl"; chmod +x "$STUB/curl"
+    stub_ssh "FILE bbb /etc/evil" 0
+    run_watch check
+    grep -q 'evil' "$DEJIMA_GUARD_STATE/last-report"
+}
+
+@test "no alerting configured at all is a failure, not a quiet success" {
+    stub_ssh "FILE aaa /etc/one" 0
+    printf 'devbox_host = devbox.example.invalid\ndevbox_user = tester\n' > "$DEJIMA_GUARD_CONF"
+    run_watch check
+    stub_ssh "FILE bbb /etc/two" 0
+    run_watch check
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"ALERT NOT SENT"* ]]
+}
+
+@test "test-alert publishes, and says that sent is not received" {
+    # Whether a push arrived is a question only the operator's phone answers,
+    # so this must not imply it verified anything.
+    run_watch test-alert
+    [ "$status" -eq 0 ]
+    [ "$(alerts)" = 1 ]
+    [[ "$output" == *"Sent is not received"* ]]
+}
+
+@test "test-alert fails loudly when the channel is broken" {
+    printf '#!/bin/sh\nexit 22\n' > "$STUB/curl"; chmod +x "$STUB/curl"
+    run_watch test-alert
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"goes nowhere"* ]]
+}
+
+@test "the README does not hand anyone a placeholder token to paste" {
+    # It said: printf 'ntfy_token = tk_...' > secrets/config, inside a block
+    # meant to be pasted whole. Pasted verbatim that writes a literal tk_...,
+    # and a wrong token is a channel that silently drops findings.
+    ! grep -q "printf 'ntfy_token" "$REPO/README.md" \
+        || { echo "README still pastes a placeholder token into a file"; false; }
+}
+
 # --- accepting --------------------------------------------------------------
 
 @test "accept replaces the baseline" {
