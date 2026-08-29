@@ -144,7 +144,20 @@ compose will refuse to start with a secret it cannot find.
 
 ```sh
 chmod 600 secrets/guard_key secrets/config
+sudo chown 10001:10001 secrets/guard_key secrets/config
 ```
+
+**The `chown` is not optional, and it is the first thing that goes wrong
+without it.** The image runs as uid 10001 rather than root, and compose mounts
+a file secret with the host's ownership and mode — so a key that is `0600` and
+yours is a key the container cannot open. ssh reports that as
+`Permission denied (publickey,password)`, which looks exactly like the devbox
+rejecting the key, and sends you to the far end to debug a file on this one.
+`dejima-guard` checks the key itself before connecting and says so plainly, but
+the `chown` is what fixes it.
+
+10001 is fixed in the `Dockerfile` and is part of the interface, so it is safe
+to write down here.
 
 **5. Start it, then prove the alert path works.**
 
