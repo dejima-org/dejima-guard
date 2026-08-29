@@ -833,3 +833,48 @@ SSHEOF
     grep -q 'dejima/src/branch/main/ATTRIBUTION.md' "$REPO/README.md"
     grep -q 'dejima/src/branch/main/ATTRIBUTION.md' "$REPO/assets/README.md"
 }
+
+# --- what the alerting setup documents ---------------------------------------
+
+@test "the intervals the README quotes are the ones that ship" {
+    # The Uptime Kuma advice is "longer than dejima-guard's", which is only
+    # actionable if the number beside it is this program's actual cadence. Two
+    # places hold it and neither knows about the README.
+    grep -q 'DEJIMA_GUARD_INTERVAL=900' "$REPO/Dockerfile"
+    grep -q 'OnUnitActiveSec=15min' "$REPO/systemd/dejima-guard.timer"
+    grep -q '900s' "$REPO/README.md"
+    grep -q '15min' "$REPO/README.md"
+}
+
+@test "the heartbeat interval documented is longer than the push interval" {
+    # Equal intervals put every ping on the deadline, and the timer adds up to
+    # 60s of jitter on top - so a monitor set to match goes down on a healthy
+    # guard, which is the false alarm that gets a monitor deleted.
+    kuma=$(grep -oE '\b1200s\b' "$REPO/README.md" | head -1)
+    [ "$kuma" = 1200s ]
+    [ "${kuma%s}" -gt 900 ]
+}
+
+@test "ntfy is documented as write-only for the guard, and closed by default" {
+    # read-write would let whoever takes the guard read every alert ever sent
+    # about the devbox, and the absence of alerts is as informative as their
+    # content. deny-all is what denies the devbox without anyone remembering to.
+    grep -q 'auth-default-access: deny-all' "$REPO/README.md"
+    grep -q 'ntfy access guard .* write-only' "$REPO/README.md"
+    grep -q 'ntfy access phone .* read-only' "$REPO/README.md"
+
+    # deny-all is server-wide, so it takes dejima's anonymous publishing with
+    # it unless that topic is granted back by name. Recommending the setting
+    # without the grant would break notifications on the box being watched.
+    grep -q 'ntfy access everyone .* read-write' "$REPO/README.md"
+
+    # And it is not always available: a shared server is somebody else's to
+    # configure. Advice that assumes otherwise has no answer for the reader who
+    # cannot take it.
+    grep -q 'server you cannot reconfigure' "$REPO/README.md"
+
+    # An admin bypasses the ACL entirely, so every entry above is decoration on
+    # an admin account. Documenting the grants without that would describe a
+    # closed topic that is open.
+    grep -q 'admin bypasses the ACL' "$REPO/README.md"
+}

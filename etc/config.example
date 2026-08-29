@@ -81,6 +81,16 @@ ntfy_url = https://ntfy.example.invalid/devbox-alerts
 
 # A token with write access to that topic and nothing else. Optional on a
 # server without access control, and the reason this file is 0640.
+#
+# WRITE-ONLY, not read-write. This program never reads the topic, and this
+# machine could itself be taken - a token that can read would hand whoever took
+# it every alert ever sent about the devbox, and the gaps between them.
+#
+#   ntfy access guard <topic> write-only
+#
+# The README has the rest, including what to do on a server you cannot
+# reconfigure: auth-default-access is server-wide, so closing one topic is not
+# something a shared ntfy will let you do.
 # ntfy_token = tk_...
 
 # ===========================================================================

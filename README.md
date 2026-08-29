@@ -72,6 +72,8 @@ server, a Pi, an existing VM — anything already running. **Not a new VM**: thi
 is not a service, and a machine of its own would be a poor trade for something
 whose whole job is to notice.
 
+### On the host, with a systemd timer
+
 ```sh
 sudo install -m 0755 bin/dejima-guard bin/dejima-guard-install-key /usr/local/sbin/
 sudo install -d -m 0750 /etc/dejima-guard /var/lib/dejima-guard
@@ -226,17 +228,95 @@ other end of the connection, not the machine the guard runs on.
 Both self-hosted, and if you run dejima's remote access you already have the
 first.
 
-**ntfy** carries the alerts. Give this its **own topic**, separate from the one
-dejima pushes to, and give the devbox no credential for it — `ntfy_url` lives in
-`~/.config/dejima/config` *on the devbox*, so root there can publish to that
-topic, drown it, or forge an all-clear. Deny the devbox read on the alert topic
-too: an intruder who can read the alerts about themselves learns what the
-monitoring noticed and what it missed.
+#### ntfy: its own topic, and a token that can only write to it
 
-**Uptime Kuma** is the dead-man's switch. A push monitor expects a ping on a
-cadence and alerts when one does not arrive; this pings only on a cycle that
-completed and found nothing wrong. Without it, a dejima-guard that has died
-looks exactly like one with nothing to report.
+Give this its **own topic**, separate from the one dejima pushes to. `ntfy_url`
+lives in `~/.config/dejima/config` *on the devbox*, so root there can publish to
+dejima's topic, drown it, or forge an all-clear on it. A shared topic hands the
+machine under suspicion a voice in the channel reporting on it.
+
+On a public ntfy that is the whole of what you can do — anyone who learns the
+topic name can post to it. How much better you can do depends on whether the
+server is yours to configure.
+
+**On a server you control**, close everything and grant back:
+
+```yaml
+# server.yml
+auth-file: /var/lib/ntfy/user.db
+auth-default-access: deny-all
+```
+
+```sh
+ntfy user add guard                              # role user, not admin
+ntfy user add phone                              # you, subscribing
+ntfy access guard    dejima-alerts  write-only
+ntfy access phone    dejima-alerts  read-only
+ntfy access everyone dejima-notify  read-write   # dejima's topic, as it was
+ntfy token add guard                             # prints tk_..., for secrets/config
+ntfy access                                      # read it back
+```
+
+`deny-all` is server-wide — there is no per-topic default — so anything else
+publishing anonymously has to be granted back by name. That last line does it
+for `dejima-notify-watch`, which has no token to offer, and leaves dejima's
+topic exactly as open as it is today. **Nothing about dejima has to change**, and
+the devbox still ends up with no access to `dejima-alerts` at all.
+
+**Neither account may be an `admin`.** An admin bypasses the ACL entirely and
+has read-write everywhere, so an admin token is a key to the alert topic no
+entry can take away. `ntfy user add` defaults to the `user` role, which is what
+these want.
+
+**`write-only` for the guard**, not `read-write`: it never reads the topic, and
+this machine can be taken too. Read access would hand whoever took it every
+alert ever sent about the devbox, and the gaps between them are as informative
+as the contents. The devbox gets no read either — an intruder who can read the
+alerts about themselves learns what the monitoring missed — and under `deny-all`
+that costs nothing to arrange, because it is already true.
+
+**On a server you cannot reconfigure**, one topic cannot be closed properly.
+Access falls back to `auth-default-access` whenever no ACL entry matches, so a
+permissive default means denying the alert topic to `everyone` *and* to each
+existing account — and any account added later inherits publish rights to the
+channel reporting on the devbox. It works today and fails open the next time
+somebody adds a user. Every existing `admin` keeps full access regardless, since
+admins are not subject to the ACL at all. What is left:
+
+- **A long random topic name.** Not access control, and worth saying so plainly,
+  but it is the same thing a public ntfy relies on and it costs nothing.
+- **A second server for this one topic.** The alert channel carries a few
+  hundred bytes a day. It does not have to be the busy one, and the heartbeat is
+  already elsewhere for the same reason.
+- **`alert_command`**, which routes the alert somewhere that is not ntfy at all.
+
+Whichever way: a stolen guard token can still publish. It can forge an all-clear
+or bury a real alert under noise, and nothing in ntfy prevents that. It is part
+of why the heartbeat is a separate channel on a separate server.
+
+Read it back rather than assuming it took: `ntfy access` prints the ACL as the
+server understands it and `ntfy user list` the accounts, including each one's
+role. Under Docker, prefix both with `docker exec -it ntfy`.
+
+#### Uptime Kuma: a Push monitor, and the interval matters
+
+This is the dead-man's switch. dejima-guard pings only on a cycle that completed
+and found nothing wrong, so silence is the signal — and without it, a guard that
+died looks exactly like one with nothing to report.
+
+**Add New Monitor → Monitor Type: `Push`.** Kuma then shows a **Push URL** ending
+in a token. That whole URL is `heartbeat_url`.
+
+| Field | Set it to | Why |
+| --- | --- | --- |
+| Monitor Type | `Push` | Kuma waits to be called. Every other type calls out, and there is nothing here to call |
+| Heartbeat Interval | **Longer than dejima-guard's** — 1200s against the default 900s | Kuma counts from the last ping, so equal intervals put every ping right on the deadline. The gap is never exactly 900s either: the systemd timer adds up to 60s of deliberate jitter, and the cycle itself takes as long as two SSH round trips |
+| Retries | `0` | A missed ping *is* the finding. Retries make Kuma wait for more of them before saying so, which delays the one alert that reports a guard that has stopped |
+
+dejima-guard's own interval is `DEJIMA_GUARD_INTERVAL` (900s) in a container, or
+`OnUnitActiveSec` in `systemd/dejima-guard.timer` (15min) on a host. Change
+either and Kuma has to follow, or it starts alerting on a schedule nobody
+changed.
 
 Anything else works through `alert_command` and a `heartbeat_url` of the same
 shape. Only the one path is documented, because a list of alternatives is a list
