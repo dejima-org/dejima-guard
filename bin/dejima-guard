@@ -152,6 +152,27 @@ ssh_devbox() {  # ssh_devbox COMMAND...
     ssh $opts ${key:+-i "$key"} "$user@$host" "$@"
 }
 
+# Everything the devbox said, made safe to store and to print.
+#
+# THE REPORT IS AN UNTRUSTED DOCUMENT. The alert bodies are composed here from
+# counts, and that rule was enforced - but the alert exists to say go and read
+# the report, and the report is the devbox's own words: file paths, unit names,
+# and whatever ssh had to say. A path is a filename, and a filename may contain
+# an escape sequence.
+#
+# `dejima-guard report` cats that to a terminal, on the machine holding the SSH
+# key to the box the report is about. ESC[2K ESC[A erases the line above and
+# writes over it, so a compromised devbox could name a file such that the
+# evidence of it scrolls past as an all-clear. Every byte of that path came from
+# the machine under suspicion.
+#
+# Control characters become "?" rather than being deleted: a filename with an
+# escape sequence in it is itself a finding, and one that vanished silently
+# would be the second thing this got wrong. Newlines are kept, being the line
+# structure rather than content, and anything printable is left alone so a
+# legitimate non-ASCII path still reads as itself.
+sanitise() { LC_ALL=C tr '\000-\011\013-\037\177' '?'; }
+
 # The watched host's own name, for alerts that would otherwise say "the devbox".
 #
 # An operator watching more than one box gets pushes that are indistinguishable
@@ -343,6 +364,7 @@ cmd_check() {
     # has any say in, so it goes to the log and the report on this machine and
     # never into the push.
     if ! state=$(ssh_devbox dejima-devbox-audit drift --state 2>"$ssh_err"); then
+        sanitise < "$ssh_err" > "$ssh_err.clean" && mv "$ssh_err.clean" "$ssh_err"
         alert max "$(target_short): unreachable" \
             "dejima-guard could not collect from $(target). It may be down, off the network, or refusing this key." || true
         say "FAIL: could not reach $(target). ssh said:"
@@ -373,11 +395,16 @@ cmd_check() {
         say "FAIL: empty state"
         return 1
     fi
+    # Sanitised after capture, not piped through on the way in: a pipeline would
+    # put tr's status where ssh's needs to be, and reading the wrong end of a
+    # pipeline is a mistake this program has already made once.
+    state=$(printf '%s\n' "$state" | sanitise)
     printf '%s\n' "$state" > "$now"
 
     # 2. Containment, which the devbox can answer for itself.
     reach_rc=0
     reach_out=$(ssh_devbox dejima-devbox-audit reach 2>&1) || reach_rc=$?
+    reach_out=$(printf '%s\n' "$reach_out" | sanitise)
 
     # 3. Drift, which it cannot: the baseline is here.
     if [ ! -f "$BASE" ]; then
@@ -458,6 +485,7 @@ cmd_accept() {
     install -d -m 0750 "$STATE_DIR"
     state=$(ssh_devbox dejima-devbox-audit drift --state) || die "could not collect from the devbox"
     [ -n "$state" ] || die "the devbox returned nothing - not accepting that as a baseline"
+    state=$(printf '%s\n' "$state" | sanitise)
     printf '%s\n' "$state" > "$BASE"
     say "Baseline accepted: $(grep -c . "$BASE") entries in $BASE"
     say "  Take it on a box you believe is clean. One taken on a compromised"

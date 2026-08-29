@@ -712,3 +712,79 @@ keyline() { awk '{print $1, $2}' "$BATS_TEST_TMPDIR/hk_$1.pub"; }
             2>/dev/null || true)
     [ -z "$found" ] || { echo "$found"; false; }
 }
+
+# --- the report is an untrusted document -------------------------------------
+#
+# Alert bodies are composed here from counts, and that rule holds. But the alert
+# exists to say go and read the report, and the report is the devbox's own
+# words: file paths, unit names, whatever ssh said. A path is a filename, and a
+# filename may contain an escape sequence.
+
+@test "escape sequences from the devbox do not reach the report" {
+    # ESC[2K ESC[A erases the line above and writes over it. `dejima-guard
+    # report` cats this to a terminal on the machine holding the SSH key to the
+    # box the report is about, so a compromised devbox could name a file such
+    # that the evidence of it scrolls past as an all-clear.
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch check                     # first cycle takes the baseline
+    stub_ssh "$(printf 'FILE aaa /etc/\033[2K\033[Aall-clear')" 0
+    run_watch check                     # second produces the diff, and a report
+    run_watch report
+    [[ "$output" != *$'\033'* ]]
+    [[ "$output" == *"?[2K"* ]]
+}
+
+@test "a control character is replaced rather than dropped" {
+    # A filename with an escape sequence in it is itself a finding. One that
+    # vanished silently would be the second thing this got wrong.
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch check
+    stub_ssh "$(printf 'FILE aaa /etc/we\001ird')" 0
+    run_watch check
+    run_watch report
+    [[ "$output" == *"we?ird"* ]]
+}
+
+@test "a legitimate non-ASCII path is left as it is" {
+    # Stripping to ASCII would mangle every accented filename on the box into a
+    # difference that never goes away.
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch check
+    stub_ssh 'FILE aaa /etc/café-und-größe' 0
+    run_watch check
+    run_watch report
+    [[ "$output" == *"café-und-größe"* ]]
+}
+
+@test "the baseline is stored sanitised, so a diff cannot resurrect one" {
+    # Sanitising only on display would leave the bytes in the baseline and in
+    # every diff computed against it.
+    stub_ssh "$(printf 'FILE aaa /etc/x\033[2Ky')" 0
+    run_watch check
+    ! grep -q $'\033' "$DEJIMA_GUARD_STATE/baseline"
+}
+
+@test "ssh's own words are sanitised too" {
+    # It is the far end talking, on the path that reports the far end failing.
+    cat > "$STUB/ssh" <<'SSHEOF'
+#!/bin/sh
+printf 'Host key \033[2Kverification failed.\n' >&2
+exit 255
+SSHEOF
+    chmod +x "$STUB/ssh"
+    run_watch check
+    [[ "$output" != *$'\033'* ]]
+}
+
+@test "the setup installs every program the README later tells you to run" {
+    # A rewrite of the setup replaced a manual step with a call to
+    # dejima-guard-install-key, which the install block did not install. The
+    # instructions were then correct about what to run and wrong about whether
+    # it was there.
+    for prog in $(grep -oE '\bdejima-guard(-[a-z-]+)?\b' "$REPO/README.md" \
+                  | sort -u | grep -v '^dejima-guard$'); do
+        [ -f "$REPO/bin/$prog" ] || continue        # not one of ours
+        grep -q "bin/$prog" "$REPO/README.md" \
+            || { echo "README runs $prog but never installs it"; false; }
+    done
+}
