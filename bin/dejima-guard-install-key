@@ -64,7 +64,8 @@ case "$KEY" in
 esac
 
 # THE RESTRICTION, and it must stay identical to what dejima-devbox-hardener's
-# docs/building-a-devbox.md section 7 documents. Two repositories, one line.
+# docs/building-a-devbox.md documents under "Let the guard in". Two repositories,
+# one line.
 #
 # The forced command ignores whatever was asked for and runs dejima-guard-shell,
 # which whitelists the two commands the guard sends. The no-* options remove
@@ -145,7 +146,8 @@ for c in "dejima-devbox-audit reach" "dejima-devbox-audit drift --state"; do
         say "  FAILED      $c"
         say "              This is one the guard needs. Check that"
         say "              $SHELL_PATH exists on the devbox and that sudoers"
-        say "              permits it - dejima-devbox-hardener section 7."
+        say "              permits it - see \"Let the guard in\" in the"
+        say "              dejima-devbox-hardener runbook."
         fails=1
     fi
 done
