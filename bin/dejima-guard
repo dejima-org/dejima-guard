@@ -118,22 +118,45 @@ ssh_devbox() {  # ssh_devbox COMMAND...
 #
 # So a body is composed here, from a fixed vocabulary and counts. The detail
 # stays in the report on this machine. The push exists to say go and look.
+# ALERT_FAILED is set when a send does not succeed, and it is why this
+# function exists rather than the callers each running curl.
+#
+# Every call site used to end in `|| true`, so a wrong token, a wrong topic or
+# an ntfy that was down produced exactly nothing: the guard found drift, said
+# ALERTED, and no alert existed. That is the worst failure this program can
+# have - worse than dying, because a dead guard trips the heartbeat and this
+# did not.
+ALERT_FAILED=0
+
 alert() {  # alert PRIORITY TITLE BODY
     local url tok cmd
     url=$(cfg ntfy_url)
     cmd=$(cfg alert_command)
 
     if [ -n "$cmd" ]; then
-        printf '%s\n%s\n' "$2" "$3" | $cmd
-        return 0
+        if printf '%s\n%s\n' "$2" "$3" | $cmd; then return 0; fi
+        ALERT_FAILED=1
+        say "ALERT NOT SENT: alert_command failed"
+        return 1
     fi
-    [ -n "$url" ] || { say "no ntfy_url and no alert_command: alert not sent"; return 1; }
+    if [ -z "$url" ]; then
+        ALERT_FAILED=1
+        say "ALERT NOT SENT: no ntfy_url and no alert_command configured"
+        return 1
+    fi
     check_url ntfy_url "$url"
     tok=$(cfg ntfy_token)
-    curl -fsS --max-time 15 \
+    if curl -fsS --max-time 15 \
         ${tok:+-H "Authorization: Bearer $tok"} \
         -H "Title: $2" -H "Priority: $1" -H "Tags: rotating_light" \
         -d "$3" "$url" >/dev/null
+    then
+        return 0
+    fi
+    ALERT_FAILED=1
+    say "ALERT NOT SENT: publishing to $url failed. Wrong token, wrong topic,"
+    say "  or the server is unreachable. The finding below went nowhere."
+    return 1
 }
 
 # The dead-man's switch, and the only part of this a compromised devbox cannot
@@ -284,6 +307,20 @@ cmd_check() {
         fi
     } > "$LAST"
 
+    if [ "$ALERT_FAILED" = 1 ]; then
+        # No heartbeat, deliberately.
+        #
+        # A guard that has found something and cannot tell anyone is, for every
+        # practical purpose, a guard that is not running - and the one channel
+        # left that can say so is the one that reports silence. Letting the
+        # heartbeat through here would have Uptime Kuma report all is well on
+        # the single cycle where it is least true.
+        say "FINDINGS WERE NOT DELIVERED. Suppressing the heartbeat so the"
+        say "  dead-man's switch reports this guard as down, which is what it"
+        say "  effectively is. See $LAST for what it could not send."
+        return 1
+    fi
+
     if [ "$rc" -eq 0 ]; then
         say "CLEAN: no changes, containment passed."
         # Only on a cycle that completed and found nothing wrong. Pinging in a
@@ -310,24 +347,53 @@ cmd_accept() {
     say "  machine records the compromise as normal and reports clean forever."
 }
 
+# The alert path is the one thing here nothing else exercises.
+#
+# A clean cycle never publishes, so a wrong token or a wrong topic sits
+# undiscovered until the first real finding - and then takes it with it. There
+# is no way around that from in here: whether a push arrived is a question only
+# the phone in your pocket can answer.
+#
+# So it is a command, and the setup says to run it and go and look. Verifying
+# it is a step somebody performs, not a claim this program can make.
+cmd_test_alert() {
+    require_config
+    say "Sending a test alert."
+    if alert default "dejima-guard: test" \
+        "If this arrived, the alert path works. Nothing is wrong with the devbox."
+    then
+        say ""
+        say "Sent. GO AND CHECK IT ARRIVED."
+        say "  Sent is not received: the server accepted it, which says nothing"
+        say "  about whether your phone is subscribed to this topic."
+        return 0
+    fi
+    say ""
+    say "  Until this works, a finding about the devbox goes nowhere."
+    return 1
+}
+
 cmd_report() { [ -r "$LAST" ] && cat "$LAST" || say "no report yet - run $PROG check"; }
 
 usage() {
     cat >&2 <<USAGE
-usage: $PROG [check|accept|report]
+usage: $PROG [check|accept|report|test-alert]
 
-  check    collect from the devbox, diff against the baseline held here,
-           alert on any change or on containment failing, and send the
-           heartbeat only if the cycle completed clean
-  accept   record the devbox's current state as the baseline
-  report   the last cycle's detail, which is deliberately not in the alert
+  check       collect from the devbox, diff against the baseline held here,
+              alert on any change or on containment failing, and send the
+              heartbeat only if the cycle completed clean and could alert
+  accept      record the devbox's current state as the baseline
+  report      the last cycle's detail, which is deliberately not in the alert
+  test-alert  publish a test alert, then go and check it arrived. Nothing
+              else here exercises that path until it is needed
 USAGE
 }
 
 case "${1:-check}" in
-    check)  cmd_check ;;
-    accept) cmd_accept ;;
-    report) cmd_report ;;
+    check)      cmd_check ;;
+    accept)     cmd_accept ;;
+    report)     cmd_report ;;
+    test-alert) cmd_test_alert ;;
     -h|--help) usage ;;
     *) say "$PROG: unknown command: $1"; usage; exit 64 ;;
 esac
