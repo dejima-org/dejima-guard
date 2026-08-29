@@ -20,8 +20,15 @@ RUN apt-get update \
 # A uid of its own. It needs no privilege: it opens outbound connections and
 # writes one directory. Running as root would be granting root to a program
 # holding an SSH key to another machine, for no reason at all.
-RUN useradd --system --create-home --home-dir /var/lib/dejima-guard \
-            --shell /usr/sbin/nologin --uid 10001 guard
+#
+# 10001 IS PART OF THE INTERFACE, not an implementation detail, and the gid is
+# pinned rather than left to whatever useradd picks. Compose bind-mounts a file
+# secret with the host's ownership and mode, so the key has to be chown'd to
+# this uid on the host - a number that moved between builds would break every
+# deployment that had done so.
+RUN groupadd --system --gid 10001 guard \
+ && useradd --system --create-home --home-dir /var/lib/dejima-guard \
+            --shell /usr/sbin/nologin --uid 10001 --gid 10001 guard
 
 COPY bin/dejima-guard bin/dejima-guard-loop bin/dejima-guard-install-key /usr/local/bin/
 RUN chmod 0755 /usr/local/bin/dejima-guard \

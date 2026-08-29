@@ -250,6 +250,39 @@ require_config() {
     case "$h" in
         CHANGE-ME*) die "host is still the example placeholder ($h) - edit your config" ;;
     esac
+    # The key is checked here, where the answer is certain, rather than left to
+    # ssh - which reports a key it could not open as
+    # "Permission denied (publickey,password)", indistinguishable from a devbox
+    # that rejected it. That sends an operator to the far end to debug a file on
+    # this one.
+    #
+    # Containers make it the expected first failure rather than an unlikely one.
+    # This image runs as its own uid, compose bind-mounts a file secret with the
+    # host's ownership and mode, and a private key is 0600 to somebody else - so
+    # a correctly built deployment cannot read its own key until the ownership
+    # is made to match.
+    local k
+    k=$(cfg ssh_key)
+    if [ -n "$k" ]; then
+        [ -e "$k" ] || die "ssh_key $k does not exist"
+        if [ ! -r "$k" ]; then
+            say "$PROG: cannot read ssh_key $k"
+            say "  this runs as uid $(id -u); the file is uid $(stat -c %u "$k" 2>/dev/null || echo '?')," \
+                "mode $(stat -c %a "$k" 2>/dev/null || echo '?')"
+            say ""
+            # Phrased around the uid this is actually running as, which is the
+            # right answer whether that is a container's own account or an
+            # operator's. Claiming "the image runs as" would be false half the
+            # time, in a message whose only job is to be believed.
+            say "  The key has to be readable by the account this runs as. In a"
+            say "  container that is not yours: compose mounts the secret with"
+            say "  the host's ownership. On the host, beside your compose file:"
+            say ""
+            say "    sudo chown $(id -u):$(id -g) secrets/guard_key secrets/config"
+            exit 2
+        fi
+    fi
+
     local u
     for u in ntfy_url heartbeat_url; do
         [ -n "$(cfg "$u")" ] && check_url "$u" "$(cfg "$u")"

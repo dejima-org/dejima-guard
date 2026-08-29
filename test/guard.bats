@@ -321,7 +321,12 @@ printf '%s\n' "$*" >> "$DEJIMA_GUARD_STATE/ssh.log"
 case "$*" in *"drift --state"*) echo "FILE aaa /etc/one" ;; esac
 EOF
     chmod +x "$STUB/ssh"
-    DEJIMA_GUARD_SSH_KEY=/var/lib/dejima-guard/id_ed25519 run_watch check
+    # A real file, because the key is checked for existence and readability
+    # before anything connects - an unreadable one is the expected first
+    # failure of a container deployment and is reported here rather than left
+    # to look like the devbox rejecting it.
+    : > "$BATS_TEST_TMPDIR/key"; chmod 600 "$BATS_TEST_TMPDIR/key"
+    DEJIMA_GUARD_SSH_KEY="$BATS_TEST_TMPDIR/key" run_watch check
     grep -q 'IdentitiesOnly=yes' "$DEJIMA_GUARD_STATE/ssh.log"
 }
 
@@ -568,4 +573,64 @@ keyline() { awk '{print $1, $2}' "$BATS_TEST_TMPDIR/hk_$1.pub"; }
     run_watch trust-host --fingerprint SHA256:definitelynotthisone
     [ "$status" -ne 0 ]
     [ ! -s "$DEJIMA_GUARD_SSH_KNOWN_HOSTS" ]
+}
+
+# --- the key this machine holds ----------------------------------------------
+#
+# Containers make an unreadable key the expected first failure rather than an
+# unlikely one: the image runs as its own uid, compose mounts a file secret with
+# the host's ownership, and a private key is 0600 to somebody else. So a
+# correctly built deployment cannot read its own key until the ownership is
+# made to match, and the whole setup looks like the devbox refusing it.
+
+@test "an unreadable key is reported here, not left to look like a rejection" {
+    # ssh calls it "Permission denied (publickey,password)", which is what a
+    # devbox that rejected the key says too - so the operator debugs the far
+    # end over a file on this one.
+    key="$BATS_TEST_TMPDIR/unreadable_key"
+    : > "$key"; chmod 000 "$key"
+    export DEJIMA_GUARD_SSH_KEY="$key"
+    stub_ssh "FILE /etc/passwd aaaa" 0
+    run_watch check
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"cannot read ssh_key"* ]]
+}
+
+@test "an unreadable key names the chown that fixes it" {
+    key="$BATS_TEST_TMPDIR/unreadable_key"
+    : > "$key"; chmod 000 "$key"
+    export DEJIMA_GUARD_SSH_KEY="$key"
+    stub_ssh "" 0
+    run_watch check
+    [[ "$output" == *"chown"* ]]
+}
+
+@test "a key that does not exist is named, rather than reported as a devbox fault" {
+    export DEJIMA_GUARD_SSH_KEY="$BATS_TEST_TMPDIR/no-such-key"
+    stub_ssh "" 0
+    run_watch check
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"does not exist"* ]]
+}
+
+@test "a bad key stops the cycle before it can alert about the devbox" {
+    # A file on this machine is not a finding about that one. Reporting it as
+    # one sends the operator to the wrong host, and the silence that follows is
+    # what the dead-man's switch is for.
+    key="$BATS_TEST_TMPDIR/unreadable_key"
+    : > "$key"; chmod 000 "$key"
+    export DEJIMA_GUARD_SSH_KEY="$key"
+    stub_ssh "" 0
+    run_watch check
+    [ "$(alerts)" -eq 0 ]
+    [ "$(heartbeats)" -eq 0 ]
+}
+
+@test "the uid the README tells you to chown to is the one the image runs as" {
+    # Two files, one number. A uid that moved between them would produce
+    # exactly the failure this documents, with the documentation insisting it
+    # had been dealt with.
+    uid=$(grep -oE '\-\-uid [0-9]+' "$REPO/Dockerfile" | awk '{print $2}')
+    [ -n "$uid" ]
+    grep -q "chown $uid:$uid" "$REPO/README.md"
 }
