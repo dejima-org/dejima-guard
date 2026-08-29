@@ -255,8 +255,8 @@ monitoring noticed and what it missed.
 
 **Uptime Kuma** is the dead-man's switch. A push monitor expects a ping on a
 cadence and alerts when one does not arrive; this pings only on a cycle that
-completed and found nothing wrong. Without it, a watcher that dies looks exactly
-like a watcher with nothing to report.
+completed and found nothing wrong. Without it, a dejima-guard that has died
+looks exactly like one with nothing to report.
 
 Anything else works through `alert_command` and a `heartbeat_url` of the same
 shape. Only the one path is documented, because a list of alternatives is a list
@@ -264,7 +264,7 @@ that goes stale.
 
 ## Why it pulls
 
-The watcher reaches in; the devbox never reaches out. That falls out of the
+dejima-guard reaches in; the devbox never reaches out. That falls out of the
 firewall the devbox already has — inbound SSH from the admin subnet is
 permitted, so **no new firewall rule is needed** — and it buys three things:
 

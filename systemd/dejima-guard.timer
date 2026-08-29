@@ -8,7 +8,7 @@ Description=Watch the devbox on a cadence
 # almost nothing; much longer and a compromise has room to tidy up.
 OnBootSec=5min
 OnUnitActiveSec=15min
-# Without this a fleet of watchers all collect on the same second.
+# Without this a fleet of dejima-guards all collect on the same second.
 RandomizedDelaySec=60s
 Persistent=true
 
