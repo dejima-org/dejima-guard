@@ -247,21 +247,86 @@ auth-file: /var/lib/ntfy/user.db
 auth-default-access: deny-all
 ```
 
+> ⚠️ **This is a server-wide switch, and on its own it will break notifications
+> that have nothing to do with dejima.** It closes *every* topic on that server,
+> and because the apps subscribe to all of a server's topics over one
+> connection, a single topic your account cannot read returns 403 for **all** of
+> them. Grant everything back before you turn it on, or the first thing you
+> notice is unrelated alerts going quiet.
+
 ```sh
 ntfy user add guard                              # role user, not admin
 ntfy user add phone                              # you, subscribing
 ntfy access guard    dejima-alerts  write-only
-ntfy access phone    dejima-alerts  read-only
+ntfy access phone    "*"            read-only    # EVERY topic you subscribe to
 ntfy access everyone dejima-notify  read-write   # dejima's topic, as it was
 ntfy token add guard                             # prints tk_..., for secrets/config
 ntfy access                                      # read it back
 ```
 
 `deny-all` is server-wide — there is no per-topic default — so anything else
-publishing anonymously has to be granted back by name. That last line does it
-for `dejima-notify-watch`, which has no token to offer, and leaves dejima's
+publishing anonymously has to be granted back by name. The `everyone` line does
+that for `dejima-notify-watch`, which has no token to offer, and leaves dejima's
 topic exactly as open as it is today. **Nothing about dejima has to change**, and
 the devbox still ends up with no access to `dejima-alerts` at all.
+
+**The `"*"` for the reading account is doing real work**, and narrowing it is
+where this goes wrong. Name each topic instead if you prefer, but name *all* of
+them — every topic that account is subscribed to anywhere, not just the two
+here. A single one left out denies the rest along with it.
+
+Anything else that was publishing anonymously needs its own line. Wildcards are
+allowed, so a family goes in one:
+
+```sh
+ntfy access everyone "home-*" read-write     # whatever else lived on this server
+```
+
+The mechanism, since the symptom hides it: the apps subscribe over one request,
+`/topic-a,topic-b,topic-c/ws`, and ntfy authorises it by looping the list and
+returning 403 for the whole request on the first topic the account cannot read.
+Nothing reports which one. That is why a single missing grant reads as the
+server being broken rather than as one line being absent.
+
+**An `everyone` grant covers a logged-in user too**, where that user has no
+entry of their own for the topic: ntfy resolves permissions from the specific
+user's entries *and* `everyone`'s, preferring the user's own, then the longer
+topic pattern. Logging in does not lose you the anonymous grants — which is why
+a topic left open for dejima stays readable by the phone account.
+
+**Subscribers have to log in now, and the symptom does not say so.** A denied
+subscribe fails the WebSocket upgrade, which surfaces in the apps as
+`WebSocketNotSupportedException` or `websocket upgrade failed with HTTP 403` —
+which reads as a broken reverse proxy, not as an ACL doing its job. Publishing
+keeps working throughout, because that path carries a token, so a test alert
+arriving proves nothing about whether anyone can read it.
+
+Add the server with the `phone` credentials in the web app under
+**Settings → Users**, or per-server in the Android app. Two commands separate
+the ACL from the proxy without involving WebSockets at all:
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' https://ntfy.example.invalid/dejima-alerts/json?poll=1
+curl -s -o /dev/null -w '%{http_code}\n' -u phone:PASS https://ntfy.example.invalid/dejima-alerts/json?poll=1
+```
+
+403 then 200 is the ACL working. Anything else is the proxy. To find a stray,
+ask about each topic on its own and then about all of them at once — the
+combination failing while every part succeeds is the loop above:
+
+```sh
+for t in dejima-alerts dejima-notify whatever-else; do
+  printf '%s ' "$t"
+  curl -s -o /dev/null -w '%{http_code}\n' -u phone:PASS \
+    "https://ntfy.example.invalid/$t/json?poll=1"
+done
+```
+
+A browser cannot set an `Authorization` header on a WebSocket, so anything
+hand-rolled passes `?auth=`, whose value is base64 of the literal string
+`Basic ` followed by base64 of `user:pass` — base64 of a base64, url-safe and
+unpadded. The apps do this for you; it only matters if you are writing the
+client.
 
 **Neither account may be an `admin`.** An admin bypasses the ACL entirely and
 has read-write everywhere, so an admin token is a key to the alert topic no

@@ -878,3 +878,32 @@ SSHEOF
     # closed topic that is open.
     grep -q 'admin bypasses the ACL' "$REPO/README.md"
 }
+
+@test "the deny-all advice warns that it closes the rest of the server too" {
+    # It is a server-wide setting recommended for one topic's sake. A reader who
+    # applies it and loses every other subscription was told to do that, and the
+    # symptom - a failed WebSocket upgrade - points at their reverse proxy
+    # rather than at the setting they just changed.
+    grep -q 'break notifications' "$REPO/README.md"
+    grep -q '403' "$REPO/README.md"
+    grep -qi 'log in' "$REPO/README.md"
+
+    # The warning has to sit with the setting, not below the commands that
+    # follow it. A reader who has already run the block has already broken the
+    # other notifications on that server.
+    yaml=$(grep -n 'auth-default-access: deny-all' "$REPO/README.md" | head -1 | cut -d: -f1)
+    warn=$(grep -n 'server-wide switch' "$REPO/README.md" | head -1 | cut -d: -f1)
+    cmds=$(grep -n 'ntfy user add guard' "$REPO/README.md" | head -1 | cut -d: -f1)
+    [ "$warn" -gt "$yaml" ] && [ "$warn" -lt "$cmds" ]
+
+    # And the block a reader pastes has to be one that works. Granting the
+    # reading account only the alert topic is the configuration that took down
+    # everything else on the server.
+    grep -q 'ntfy access phone    "\*"' "$REPO/README.md"
+
+    # The apps subscribe to every topic over one request, and ntfy denies the
+    # whole request on the first topic the account cannot read. Without this,
+    # a single stray subscription looks like the server being broken and both
+    # correctly configured topics look like the thing that broke.
+    grep -q 'returning 403 for the whole request' "$REPO/README.md"
+}
