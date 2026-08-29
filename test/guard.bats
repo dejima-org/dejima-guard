@@ -788,3 +788,18 @@ SSHEOF
             || { echo "README runs $prog but never installs it"; false; }
     done
 }
+
+@test "every compose command that starts the guard rebuilds it" {
+    # There is no registry: the image is built from the Dockerfile. `docker
+    # compose up -d` reuses whatever image exists, so after a git pull it starts
+    # the old code and reports success - an update that silently did not happen,
+    # on the program whose job is to notice things.
+    while IFS= read -r line; do
+        case "$line" in
+            *" up "*|*" run "*) ;;
+            *) continue ;;                  # exec and down need no image built
+        esac
+        [[ "$line" == *--build* ]] \
+            || { echo "compose command without --build: $line"; false; }
+    done < <(grep -oE 'docker compose [a-z]+ [^`]*' "$REPO/README.md")
+}

@@ -141,10 +141,15 @@ same treatment.
 **4. Record the host key and start it.**
 
 ```sh
-docker compose run --rm dejima-guard dejima-guard trust-host
-docker compose up -d
+docker compose run --build --rm dejima-guard dejima-guard trust-host
+docker compose up --build -d
 docker compose exec dejima-guard dejima-guard test-alert
 ```
+
+**`--build`, every time.** This builds from the `Dockerfile` rather than pulling
+from a registry, and `up -d` reuses whatever image already exists — so after a
+`git pull` it would start the old code and report success. Rebuilding is how an
+update takes effect here.
 
 **Go and check that alert arrived on your phone.** Nothing else exercises that
 path, and a broken one takes the first real finding with it.
