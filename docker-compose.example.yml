@@ -13,6 +13,10 @@
 # forgotten.
 services:
   dejima-guard:
+    # Built here, not pulled: there is no registry for this. Which makes
+    # `--build` part of every command that starts it - `docker compose up -d`
+    # alone reuses the image it already has, so after a `git pull` it would run
+    # the old code and look like it had worked.
     build: .
     # image: gitbox.example.invalid/dejima/dejima-guard:latest
     container_name: dejima-guard
