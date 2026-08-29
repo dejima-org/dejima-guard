@@ -77,18 +77,27 @@ whose whole job is to notice.
 ### On the host, with a systemd timer
 
 ```sh
+sudo useradd --system --home-dir /var/lib/dejima-guard \
+             --shell /usr/sbin/nologin dejima-guard
 sudo install -m 0755 bin/dejima-guard bin/dejima-guard-install-key /usr/local/sbin/
-sudo install -d -m 0750 /etc/dejima-guard /var/lib/dejima-guard
-sudo install -m 0640 etc/config.example /etc/dejima-guard/config
+sudo install -d -m 0750 -o dejima-guard -g dejima-guard \
+             /etc/dejima-guard /var/lib/dejima-guard
+sudo install -m 0640 -o root -g dejima-guard etc/config.example /etc/dejima-guard/config
 sudoedit /etc/dejima-guard/config
 ```
+
+**An account of its own, because the unit runs as it.** This holds an SSH key to
+another machine, and a bug in it should yield that account rather than root on
+whatever host you put it on. The config stays root-owned and group-readable: it
+names a command the guard runs, so write access to it is code execution as the
+guard, and `dejima-guard` refuses to start if it is writable by group or others.
 
 A key of its own, put on the devbox restricted so it can run the two read-only
 subcommands and nothing else:
 
 ```sh
-sudo ssh-keygen -t ed25519 -N '' -f /var/lib/dejima-guard/id_ed25519
-sudo dejima-guard-install-key
+sudo -u dejima-guard ssh-keygen -t ed25519 -N '' -f /var/lib/dejima-guard/id_ed25519
+sudo -u dejima-guard dejima-guard-install-key
 ```
 
 It authenticates to the devbox the ordinary way, so expect a password prompt:
@@ -102,15 +111,19 @@ Then the devbox's host key, which nothing else records and every other command
 needs:
 
 ```sh
-sudo dejima-guard trust-host
-sudo dejima-guard check     # first run records the baseline, alerts nothing
+sudo -u dejima-guard dejima-guard trust-host
+sudo -u dejima-guard dejima-guard accept    # the baseline, taken deliberately
 sudo install -m 0644 systemd/dejima-guard.{service,timer} /etc/systemd/system/
 sudo sed -i 's|@@BIN_DIR@@|/usr/local/sbin|' /etc/systemd/system/dejima-guard.service
 sudo systemctl daemon-reload && sudo systemctl enable --now dejima-guard.timer
 ```
 
-**Take the first baseline on a box you believe is clean.** One taken on a
-compromised machine records the compromise as normal and reports clean forever.
+**Take the baseline on a box you believe is clean.** One taken on a compromised
+machine records the compromise as normal and reports clean forever. `check` will
+not take one for you: under the timer that would happen five minutes after boot,
+unattended, and everything the guard says afterwards rests on that file. Until
+you run `accept` it reports as down, which is what a guard that has not been
+told what normal looks like is.
 
 `trust-host` prints the fingerprint before writing it: compare it against
 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the devbox, or pass
@@ -174,6 +187,7 @@ same treatment.
 
 ```sh
 docker compose run --build --rm dejima-guard dejima-guard trust-host
+docker compose run --build --rm dejima-guard dejima-guard accept  # the baseline
 docker compose up --build -d
 docker compose exec dejima-guard dejima-guard test-alert
 ```
