@@ -803,3 +803,33 @@ SSHEOF
             || { echo "compose command without --build: $line"; false; }
     done < <(grep -oE 'docker compose [a-z]+ [^`]*' "$REPO/README.md")
 }
+
+# --- branding -----------------------------------------------------------------
+
+@test "every image the README references is a file this repository ships" {
+    # Both syntaxes and both formats. The wordmark is an <img> tag and a png;
+    # the badge is markdown image syntax and an svg. A test written for only the
+    # first pair would not have seen the second at all.
+    found=0
+    while IFS= read -r src; do
+        [ -n "$src" ] || continue
+        case "$src" in http*) continue ;; esac
+        found=$((found + 1))
+        [ -f "$REPO/$src" ] || { echo "README references missing image: $src"; false; }
+    done < <(grep -ohE 'src="[^"]+\.(png|svg)"|\]\([^)]+\.(png|svg)\)' "$REPO/README.md" \
+             | sed 's/^src="//; s/"$//; s/^](//; s/)$//')
+    [ "$found" -ge 2 ] || { echo "expected at least the wordmark and the badge"; false; }
+
+    # Both wordmark modes ship, so a mirror on a light-themed host changes one
+    # line rather than needing a file it does not have.
+    [ -f "$REPO/assets/dejima-wordmark-darkmode.png" ]
+    [ -f "$REPO/assets/dejima-wordmark-lightmode.png" ]
+}
+
+@test "the marks are attributed, since the licence here does not cover them" {
+    # They are trademarks, and GPL-3.0 says nothing about them. The link is
+    # absolute so a fork resolves it to the canonical terms rather than to its
+    # own copy of them.
+    grep -q 'dejima/src/branch/main/ATTRIBUTION.md' "$REPO/README.md"
+    grep -q 'dejima/src/branch/main/ATTRIBUTION.md' "$REPO/assets/README.md"
+}

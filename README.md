@@ -1,3 +1,29 @@
+<!-- Fixed, not preference-aware, and that is the decision rather than an
+     oversight. `prefers-color-scheme` reports the browser's setting, never the
+     site's, and this is read on a forge that renders dark whichever way the
+     browser is set - so anything conditional shows dark ink on a dark page to
+     a reader whose browser prefers light, and does it silently.
+     The suffix names the mode a file is FOR, not the colour of its ink:
+     -darkmode is the pale wordmark that belongs on a dark page. A mirror on a
+     light-themed host swaps the filename below for dejima-wordmark-lightmode.png,
+     which is committed alongside for exactly that. One line, on the mirror,
+     where someone can see whether it worked.
+     Every &nbsp; here is spacing, and it has to be a character rather than CSS
+     or a presentation attribute. Gitea's sanitizer strips `style` from the tag
+     and from any wrapper, `hspace`/`vspace` survive sanitizing only to be
+     ignored by browsers that dropped HTML4 presentation attributes, and a bare
+     <br> ends a line nothing follows, which browsers collapse to no height.
+     &nbsp; survives as a real U+00A0: on its own line it fills a paragraph
+     that would otherwise be empty, and immediately before the tag it sits
+     inline and indents the image by one space. -->
+&nbsp;
+
+&nbsp;<img src="assets/dejima-wordmark-darkmode.png" alt="dejima" height="72">
+
+---
+
+&nbsp;
+
 # dejima-guard
 
 Notices when a devbox changes, and tells you — from a machine that is not the
@@ -21,6 +47,8 @@ detail — see [Why it pulls](#why-it-pulls).
 | [Setting it up](#setting-it-up) | **Start here.** One config file, one key, and either a timer or a container |
 | [Why it pulls](#why-it-pulls) | The three things the inversion buys |
 | [What it does not do](#what-it-does-not-do) | Read this before relying on it |
+
+[![Developed in dejima](assets/dejima-badge.svg)](https://gitbox.branderson.io/dejima/dejima)
 
 ---
 
@@ -287,4 +315,9 @@ that failed.
 
 ## License
 
-GPL-3.0-or-later.
+GPL-3.0-or-later. See [LICENSE](LICENSE).
+
+The dejima wordmark and logo are not code and are not covered by that licence.
+They are trademarks; who holds them and what may be done with them is stated
+once for the organisation, at
+[dejima's ATTRIBUTION.md](https://gitbox.branderson.io/dejima/dejima/src/branch/main/ATTRIBUTION.md).
