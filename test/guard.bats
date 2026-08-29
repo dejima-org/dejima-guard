@@ -962,3 +962,14 @@ url = "http://evil.example.invalid/'
     grep -qi 'egress' "$REPO/SECURITY.md"
     grep -q 'SECURITY.md' "$REPO/README.md"
 }
+
+@test "no em-dashes, anywhere this project publishes" {
+    # House style across the organisation. They are also the single most
+    # reliable tell of machine-written prose, which is a poor look on a project
+    # about noticing what changed.
+    # Built from its bytes rather than written out, or this file is the one
+    # hit the check reports and the only way to pass is to exempt the test.
+    dash=$(printf '\xe2\x80\x94')
+    found=$(cd "$REPO" && git ls-files | xargs grep -nF "$dash" 2>/dev/null || true)
+    [ -z "$found" ] || { echo "$found"; false; }
+}

@@ -26,7 +26,7 @@
 
 # dejima-guard
 
-Notices when a devbox changes, and tells you — from a machine that is not the
+Notices when a devbox changes, and tells you, from a machine that is not the
 devbox.
 
 A devbox has no upper bound on how long a compromise lasts. Its sister project,
@@ -40,7 +40,7 @@ made the box report what changed. This is the part that reads those reports and
 wakes you up.
 
 **It does not run on the devbox.** That is the entire design, not a deployment
-detail — see [Why it pulls](#why-it-pulls).
+detail: see [Why it pulls](#why-it-pulls).
 
 | | |
 | --- | --- |
@@ -61,7 +61,7 @@ awaiting scrutiny, not one that has survived it.
 
 **One maintainer, no support.** Nothing about this is promised: not a reply, not
 a fix, not a release. [SECURITY.md](SECURITY.md) has what this claims, what it
-holds, and where it is weaker than dejima — and is where to report a
+holds, and where it is weaker than dejima. It is also where to report a
 vulnerability rather than in a public issue.
 
 **It is a second opinion, not a boundary.** Nothing here prevents anything. It
@@ -70,7 +70,7 @@ watches, and everything it can tell you is something that has already happened.
 ## Setting it up
 
 It needs a machine that is always on and is not the devbox. A NAS, a home
-server, a Pi, an existing VM — anything already running. **Not a new VM**: this
+server, a Pi, an existing VM: anything already running. **Not a new VM**: this
 is not a service, and a machine of its own would be a poor trade for something
 whose whole job is to notice.
 
@@ -91,7 +91,7 @@ sudo ssh-keygen -t ed25519 -N '' -f /var/lib/dejima-guard/id_ed25519
 sudo dejima-guard-install-key
 ```
 
-It authenticates to the devbox the ordinary way, so expect a password prompt —
+It authenticates to the devbox the ordinary way, so expect a password prompt:
 the guard's key is what it installs, not what it uses. It then tries four
 commands with the new key and reports whether the restriction holds. It needs
 `dejima-guard-shell` and a sudoers rule on the devbox, both from
@@ -112,7 +112,7 @@ sudo systemctl daemon-reload && sudo systemctl enable --now dejima-guard.timer
 **Take the first baseline on a box you believe is clean.** One taken on a
 compromised machine records the compromise as normal and reports clean forever.
 
-`trust-host` prints the fingerprint before writing it — compare it against
+`trust-host` prints the fingerprint before writing it: compare it against
 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the devbox, or pass
 `--fingerprint SHA256:...` and have it refuse anything else. Skipping it is not
 a quiet failure: host key checking is left on, batch mode turns its prompt into
@@ -121,7 +121,7 @@ an error, and every cycle then reports the devbox unreachable at max priority.
 ### Or as a container
 
 **1. Copy the example and edit it.** Every variable is commented with what goes
-in it. Your copy is gitignored, and the example will not start as shipped — its
+in it. Your copy is gitignored, and the example will not start as shipped: its
 host is a placeholder the guard refuses, so it cannot become a live config by
 being copied and forgotten.
 
@@ -143,7 +143,7 @@ bin/dejima-guard-install-key --pub secrets/guard_key.pub you@devbox
 ```
 
 **Not `ssh-copy-id`.** It copies the bare key with no options, and a bare key
-here is a shell on the devbox for whoever eventually takes *this* machine —
+here is a shell on the devbox for whoever eventually takes *this* machine:
 the one holding the evidence about that one. The line needs a forced command,
 which `ssh-copy-id` cannot attach, and doing it by hand means copy-then-edit
 with an unrestricted key live in between.
@@ -156,7 +156,7 @@ token.
 ntfy_token = <the token, from your ntfy server>
 ```
 
-An ntfy needing no token can have this empty, but it must exist — compose will
+An ntfy needing no token can have this empty, but it must exist: compose will
 not start with a secret it cannot find.
 
 ```sh
@@ -165,7 +165,7 @@ sudo chown 10001:10001 secrets/guard_key secrets/config
 ```
 
 **The `chown` is not optional.** The image runs as uid 10001, and compose mounts
-a secret with the host's ownership — so a key that is `0600` and yours is one
+a secret with the host's ownership, so a key that is `0600` and yours is one
 the container cannot open. 10001 is fixed in the `Dockerfile` and is part of the
 interface. Bind-mounting a host directory in place of the named volume needs the
 same treatment.
@@ -179,7 +179,7 @@ docker compose exec dejima-guard dejima-guard test-alert
 ```
 
 **`--build`, every time.** This builds from the `Dockerfile` rather than pulling
-from a registry, and `up -d` reuses whatever image already exists — so after a
+from a registry, and `up -d` reuses whatever image already exists, so after a
 `git pull` it would start the old code and report success. Rebuilding is how an
 update takes effect here.
 
@@ -200,7 +200,7 @@ filesystem read-only, and sets `no-new-privileges`.
 
 Every one can come from the config file or from the environment as
 `DEJIMA_GUARD_` plus the key in upper case. The environment wins, which is
-what makes a compose file workable — but a token belongs in the file, since
+what makes a compose file workable, but a token belongs in the file, since
 `docker inspect` shows the environment and so does anything reading `/proc`.
 
 **The machine being watched.** Everything here describes the *devbox*, at the
@@ -209,16 +209,16 @@ other end of the connection, not the machine the guard runs on.
 | Setting | What goes in it |
 | --- | --- |
 | `devbox_host` | The devbox's hostname or address, as this machine reaches it |
-| `devbox_user` | The account **on the devbox** to log in as. Not root, and no default — the devbox runbook builds a machine with no root password, so the guard connects as an ordinary account and elevates for two commands |
+| `devbox_user` | The account **on the devbox** to log in as. Not root, and no default: the devbox runbook builds a machine with no root password, so the guard connects as an ordinary account and elevates for two commands |
 | `ssh_key` | The private key **on this machine**. Its own, not a general-purpose administrative one |
-| `ssh_known_hosts` | Where the devbox's host key is remembered. Must persist — in a container, on the state volume. Populated by `dejima-guard trust-host`, never automatically |
+| `ssh_known_hosts` | Where the devbox's host key is remembered. Must persist: in a container, on the state volume. Populated by `dejima-guard trust-host`, never automatically |
 | `ssh_timeout` | Seconds to wait. The line between a slow devbox and a gone one |
 
 **Where alerts go.**
 
 | Setting | What goes in it |
 | --- | --- |
-| `ntfy_url` | The topic to publish to. **Its own**, not the one dejima pushes to — that URL lives on the devbox, so root there could drown it or forge an all-clear |
+| `ntfy_url` | The topic to publish to. **Its own**, not the one dejima pushes to: that URL lives on the devbox, so root there could drown it or forge an all-clear |
 | `ntfy_token` | Write access to that topic and nothing else. The reason the config file is `0640` |
 | `heartbeat_url` | GET after a cycle that completed clean. An Uptime Kuma push monitor |
 | `alert_command` | An alternative to ntfy: gets the title and body on stdin |
@@ -237,11 +237,8 @@ lives in `~/.config/dejima/config` *on the devbox*, so root there can publish to
 dejima's topic, drown it, or forge an all-clear on it. A shared topic hands the
 machine under suspicion a voice in the channel reporting on it.
 
-On a public ntfy that is the whole of what you can do — anyone who learns the
-topic name can post to it. How much better you can do depends on whether the
-server is yours to configure.
-
-**On a server you control**, close everything and grant back:
+On a public ntfy that is as far as you can go: anyone who learns the topic name
+can post to it. Closing it properly needs a server you configure.
 
 ```yaml
 # server.yml
@@ -250,11 +247,12 @@ auth-default-access: deny-all
 ```
 
 > ⚠️ **This is a server-wide switch, and on its own it will break notifications
-> that have nothing to do with dejima.** It closes *every* topic on that server,
-> and because the apps subscribe to all of a server's topics over one
-> connection, a single topic your account cannot read returns 403 for **all** of
-> them. Grant everything back before you turn it on, or the first thing you
-> notice is unrelated alerts going quiet.
+> that have nothing to do with dejima.** It closes *every* topic on that server.
+> Worse, the apps subscribe to all of a server's topics over one connection, and
+> ntfy authorises it by looping the list, returning 403 for the whole request
+> on the first topic the account cannot read. Nothing says which one, so
+> one missing grant reads as the server being broken. Grant everything back
+> before you turn it on.
 
 ```sh
 ntfy user add guard                              # role user, not admin
@@ -262,59 +260,39 @@ ntfy user add phone                              # you, subscribing
 ntfy access guard    dejima-alerts  write-only
 ntfy access phone    "*"            read-only    # EVERY topic you subscribe to
 ntfy access everyone dejima-notify  read-write   # dejima's topic, as it was
+ntfy access everyone "home-*"       read-write   # anything else that published
 ntfy token add guard                             # prints tk_..., for secrets/config
 ntfy access                                      # read it back
 ```
 
-`deny-all` is server-wide — there is no per-topic default — so anything else
-publishing anonymously has to be granted back by name. The `everyone` line does
-that for `dejima-notify-watch`, which has no token to offer, and leaves dejima's
-topic exactly as open as it is today. **Nothing about dejima has to change**, and
-the devbox still ends up with no access to `dejima-alerts` at all.
+Four rules decide whether that is what you think it is:
 
-**The `"*"` for the reading account is doing real work**, and narrowing it is
-where this goes wrong. Name each topic instead if you prefer, but name *all* of
-them — every topic that account is subscribed to anywhere, not just the two
-here. A single one left out denies the rest along with it.
+- **`deny-all` is server-wide.** There is no per-topic default, so everything
+  publishing anonymously needs granting back by name. `dejima-notify-watch` has
+  no token to offer and does not need one: nothing about dejima changes, and the
+  devbox still ends up with no access to `dejima-alerts` at all.
+- **Neither account may be an `admin`.** An admin bypasses the ACL entirely, so
+  an admin token is a key to the alert topic that no entry can take away.
+- **`write-only` for the guard**, not `read-write`. It never reads the topic and
+  this machine can be taken too; read access would hand whoever took it every
+  alert about the devbox, and the gaps between them are as informative as the
+  contents. The devbox gets no read either, since an intruder reading the alerts
+  about themselves learns what the monitoring missed.
+- **An `everyone` grant does cover a logged-in user**, on topics where that user
+  has no entry of their own. Logging in to read the alert topic does not cost
+  you the anonymous grant on dejima's.
 
-Anything else that was publishing anonymously needs its own line. Wildcards are
-allowed, so a family goes in one:
+The `"*"` for the reading account is doing real work. Name topics individually
+if you prefer, but name *all* of them, everywhere that account subscribes: one
+left out denies the rest with it.
 
-```sh
-ntfy access everyone "home-*" read-write     # whatever else lived on this server
-```
-
-The mechanism, since the symptom hides it: the apps subscribe over one request,
-`/topic-a,topic-b,topic-c/ws`, and ntfy authorises it by looping the list and
-returning 403 for the whole request on the first topic the account cannot read.
-Nothing reports which one. That is why a single missing grant reads as the
-server being broken rather than as one line being absent.
-
-**An `everyone` grant covers a logged-in user too**, where that user has no
-entry of their own for the topic: ntfy resolves permissions from the specific
-user's entries *and* `everyone`'s, preferring the user's own, then the longer
-topic pattern. Logging in does not lose you the anonymous grants — which is why
-a topic left open for dejima stays readable by the phone account.
-
-**Subscribers have to log in now, and the symptom does not say so.** A denied
-subscribe fails the WebSocket upgrade, which surfaces in the apps as
-`WebSocketNotSupportedException` or `websocket upgrade failed with HTTP 403` —
-which reads as a broken reverse proxy, not as an ACL doing its job. Publishing
-keeps working throughout, because that path carries a token, so a test alert
-arriving proves nothing about whether anyone can read it.
-
-Add the server with the `phone` credentials in the web app under
-**Settings → Users**, or per-server in the Android app. Two commands separate
-the ACL from the proxy without involving WebSockets at all:
-
-```sh
-curl -s -o /dev/null -w '%{http_code}\n' https://ntfy.example.invalid/dejima-alerts/json?poll=1
-curl -s -o /dev/null -w '%{http_code}\n' -u phone:PASS https://ntfy.example.invalid/dejima-alerts/json?poll=1
-```
-
-403 then 200 is the ACL working. Anything else is the proxy. To find a stray,
-ask about each topic on its own and then about all of them at once — the
-combination failing while every part succeeds is the loop above:
+**Then log the subscribers in** (web app: Settings → Users; Android: per
+server). A denied subscribe fails the WebSocket upgrade, which the apps report
+as `WebSocketNotSupportedException` or a 403 on the upgrade, so it reads as a
+broken reverse proxy. Publishing keeps working throughout, because that path
+carries a token, so a test alert arriving proves nothing about whether anyone
+can read it. To tell the ACL from the proxy without WebSockets in the way, and
+to find a topic that is denying the rest:
 
 ```sh
 for t in dejima-alerts dejima-notify whatever-else; do
@@ -324,51 +302,28 @@ for t in dejima-alerts dejima-notify whatever-else; do
 done
 ```
 
-A browser cannot set an `Authorization` header on a WebSocket, so anything
-hand-rolled passes `?auth=`, whose value is base64 of the literal string
-`Basic ` followed by base64 of `user:pass` — base64 of a base64, url-safe and
-unpadded. The apps do this for you; it only matters if you are writing the
-client.
-
-**Neither account may be an `admin`.** An admin bypasses the ACL entirely and
-has read-write everywhere, so an admin token is a key to the alert topic no
-entry can take away. `ntfy user add` defaults to the `user` role, which is what
-these want.
-
-**`write-only` for the guard**, not `read-write`: it never reads the topic, and
-this machine can be taken too. Read access would hand whoever took it every
-alert ever sent about the devbox, and the gaps between them are as informative
-as the contents. The devbox gets no read either — an intruder who can read the
-alerts about themselves learns what the monitoring missed — and under `deny-all`
-that costs nothing to arrange, because it is already true.
+Anonymous should give 403 and the credentialled call 200. Anything else is the
+proxy. A hand-rolled browser client needs `?auth=` instead of a header, since a
+browser cannot set one on a WebSocket: its value is base64 of the string
+`Basic ` plus base64 of `user:pass`.
 
 **On a server you cannot reconfigure**, one topic cannot be closed properly.
-Access falls back to `auth-default-access` whenever no ACL entry matches, so a
-permissive default means denying the alert topic to `everyone` *and* to each
-existing account — and any account added later inherits publish rights to the
-channel reporting on the devbox. It works today and fails open the next time
-somebody adds a user. Every existing `admin` keeps full access regardless, since
-admins are not subject to the ACL at all. What is left:
+Access falls back to `auth-default-access` whenever no entry matches, so denying
+the alert topic means an entry for `everyone` *and* one per account, and the
+next account added inherits publish rights to the channel reporting on the
+devbox. Existing admins keep access regardless. What is left is an unguessable
+topic name, which is not access control and is worth calling that; a second
+server for the one topic, which carries a few hundred bytes a day; or
+`alert_command`, which leaves ntfy entirely.
 
-- **A long random topic name.** Not access control, and worth saying so plainly,
-  but it is the same thing a public ntfy relies on and it costs nothing.
-- **A second server for this one topic.** The alert channel carries a few
-  hundred bytes a day. It does not have to be the busy one, and the heartbeat is
-  already elsewhere for the same reason.
-- **`alert_command`**, which routes the alert somewhere that is not ntfy at all.
-
-Whichever way: a stolen guard token can still publish. It can forge an all-clear
-or bury a real alert under noise, and nothing in ntfy prevents that. It is part
-of why the heartbeat is a separate channel on a separate server.
-
-Read it back rather than assuming it took: `ntfy access` prints the ACL as the
-server understands it and `ntfy user list` the accounts, including each one's
-role. Under Docker, prefix both with `docker exec -it ntfy`.
+Either way, a stolen guard token can still publish: a forged all-clear, or noise
+to bury a real alert. Nothing in ntfy prevents that, which is part of why the
+heartbeat is a separate channel on a separate server.
 
 #### Uptime Kuma: a Push monitor, and the interval matters
 
 This is the dead-man's switch. dejima-guard pings only on a cycle that completed
-and found nothing wrong, so silence is the signal — and without it, a guard that
+and found nothing wrong, so silence is the signal, and without it, a guard that
 died looks exactly like one with nothing to report.
 
 **Add New Monitor → Monitor Type: `Push`.** Kuma then shows a **Push URL** ending
@@ -377,7 +332,7 @@ in a token. That whole URL is `heartbeat_url`.
 | Field | Set it to | Why |
 | --- | --- | --- |
 | Monitor Type | `Push` | Kuma waits to be called. Every other type calls out, and there is nothing here to call |
-| Heartbeat Interval | **Longer than dejima-guard's** — 1200s against the default 900s | Kuma counts from the last ping, so equal intervals put every ping right on the deadline. The gap is never exactly 900s either: the systemd timer adds up to 60s of deliberate jitter, and the cycle itself takes as long as two SSH round trips |
+| Heartbeat Interval | **Longer than dejima-guard's**: 1200s against the default 900s | Kuma counts from the last ping, so equal intervals put every ping right on the deadline. The gap is never exactly 900s either: the systemd timer adds up to 60s of deliberate jitter, and the cycle itself takes as long as two SSH round trips |
 | Retries | `0` | A missed ping *is* the finding. Retries make Kuma wait for more of them before saying so, which delays the one alert that reports a guard that has stopped |
 
 dejima-guard's own interval is `DEJIMA_GUARD_INTERVAL` (900s) in a container, or
@@ -392,8 +347,8 @@ that goes stale.
 ## Why it pulls
 
 dejima-guard reaches in; the devbox never reaches out. That falls out of the
-firewall the devbox already has — inbound SSH from the admin subnet is
-permitted, so **no new firewall rule is needed** — and it buys three things:
+firewall the devbox already has: inbound SSH from the admin subnet is
+permitted, so **no new firewall rule is needed**, and it buys three things:
 
 **The baseline lives here.** Root on the devbox can lie about the current state.
 It cannot alter what this machine recorded last week.
@@ -402,7 +357,7 @@ It cannot alter what this machine recorded last week.
 quiet, or drown it by shouting.
 
 **Silence becomes a signal.** This is the one that matters. A reporter running
-*on* the devbox, switched off by whoever took the box, causes nothing to happen —
+*on* the devbox, switched off by whoever took the box, causes nothing to happen:
 forever, with nothing to see. A collection that stops arriving is itself the
 alarm, and it is the only mechanism here that a compromised machine cannot
 defeat by doing nothing.
@@ -415,7 +370,7 @@ minutes to notice the monitoring and scrub, and the resulting gap is evidence.
 - **It does not prevent anything.** Everything it reports has already happened.
 - **It does not detect an intruder who anticipated it.** The devbox-side audit
   can be lied to by root on the devbox. What this catches is a payload that did
-  not think to look — most of them, since the adversary in this threat model did
+  not think to look: most of them, since the adversary in this threat model did
   not choose your devbox.
 - **It does not watch CI runners.** Their scheduled rollback bounds dwell time,
   so the need is weaker. The design is not tier-specific and extending it would
@@ -425,7 +380,7 @@ minutes to notice the monitoring and scrub, and the resulting gap is evidence.
 - **It cannot tell you its alerts are arriving.** Sent is not received. A
   clean cycle never publishes, so a broken token or topic waits until the
   first real finding. What it does do is suppress the heartbeat when a send
-  fails, so a broken channel surfaces as a dead guard rather than as silence —
+  fails, so a broken channel surfaces as a dead guard rather than as silence:
   and `test-alert` exists so you can settle it deliberately rather than find
   out.
 - **It sends no detail.** Alert bodies carry counts and categories, never a
@@ -455,7 +410,7 @@ bats test/
 ```
 
 They stub `ssh` and `curl` on `PATH` rather than replacing functions, because
-what is under test includes whether this program calls them at all — and the
+what is under test includes whether this program calls them at all, and the
 worst failures here are silent: alerting on nothing until the topic is muted,
 staying quiet when the box stops answering, and sending the heartbeat on a cycle
 that failed.
