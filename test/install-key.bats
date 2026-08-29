@@ -82,6 +82,15 @@ authk() { cat "$HOME/.ssh/authorized_keys" 2>/dev/null || true; }
     [ ! -e "$HOME/.ssh/authorized_keys" ]
 }
 
+@test "the verification offers only the guard's key" {
+    # Without IdentitiesOnly it checks whichever key ssh happens to use, which
+    # on the operator's own machine is usually their own - so all four checks
+    # report the restriction missing when it is fine. That is what happened the
+    # first time this ran for real, and a check that is wrong in the alarming
+    # direction gets ignored as fast as one wrong the other way.
+    grep -q 'IdentitiesOnly=yes' "$TOOL"
+}
+
 @test "the restriction matches what the devbox project documents" {
     # Two repositories, one line. If dejima-devbox-hardener's section 7 and
     # this disagree, the key installed here is not the key that project's

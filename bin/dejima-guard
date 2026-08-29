@@ -104,6 +104,20 @@ ssh_devbox() {  # ssh_devbox COMMAND...
     # So it points at the state volume, where it persists and where a change to
     # it is a change somebody has to explain.
     [ -n "$known" ] && opts="$opts -o UserKnownHostsFile=$known"
+
+    # IdentitiesOnly, and it is the difference between the restriction being
+    # real and being decorative.
+    #
+    # `-i` ADDS a key to the ones offered; it does not restrict to it. So on a
+    # machine where the operator has their own key to the devbox - or an agent
+    # holding one - ssh can authenticate with that instead, and the forced
+    # command attached to the guard's key never applies. Everything works. The
+    # guard collects, the alerts arrive, and the restriction protects nothing,
+    # with nothing anywhere saying so.
+    #
+    # Found on a real devbox: the installer's own check reported the forced
+    # command not in force, because it had the same bug.
+    [ -n "$key" ] && opts="$opts -o IdentitiesOnly=yes"
     # shellcheck disable=SC2086
     ssh $opts ${key:+-i "$key"} "$user@$host" "$@"
 }
