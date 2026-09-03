@@ -361,6 +361,14 @@ heartbeat() {
 
 BASE="$STATE_DIR/baseline"
 LAST="$STATE_DIR/last-report"
+# The most recent cycle that FOUND something, kept beside the most recent cycle.
+#
+# last-report is overwritten every cycle, so a clean one erases the evidence of
+# the alert before it. On anything that alternates - and a flapping line
+# alternates by definition - an operator who runs `report` after an alert lands
+# is most likely to catch a clean cycle and see "no changes against the
+# baseline", which reads as the alert having been imaginary.
+FINDING="$STATE_DIR/last-finding"
 
 # Categories rather than paths, because the body of an alert must carry nothing
 # the watched machine chose. A count of changed unit files is safe to send; the
@@ -628,6 +636,10 @@ cmd_check() {
         fi
     } > "$LAST"
 
+    # Kept only when there was something to keep, so it is not overwritten by
+    # the next quiet cycle. This is the copy an alert is telling you to read.
+    [ "$rc" -eq 0 ] || cp "$LAST" "$FINDING"
+
     if [ "$ALERT_FAILED" = 1 ]; then
         # No heartbeat, deliberately.
         #
@@ -704,7 +716,25 @@ cmd_test_alert() {
     return 1
 }
 
-cmd_report() { [ -r "$LAST" ] && cat "$LAST" || say "no report yet - run $PROG check"; }
+cmd_report() {  # cmd_report [--finding]
+    if [ "${1:-}" = "--finding" ]; then
+        [ -r "$FINDING" ] || { say "no cycle has found anything yet"; return 0; }
+        cat "$FINDING"
+        return 0
+    fi
+    [ -r "$LAST" ] || { say "no report yet - run $PROG check"; return 0; }
+    cat "$LAST"
+
+    # Said when the last cycle was clean and an earlier one was not, because
+    # that is exactly when an operator is looking and finding nothing. Compared
+    # by content: a finding identical to the last report IS the last report.
+    if [ -r "$FINDING" ] && ! cmp -s "$FINDING" "$LAST"; then
+        say ""
+        say "That was a clean cycle. The most recent one that found something is"
+        say "still here, from $(sed -n 's/^--- collected //p' "$FINDING" | head -1):"
+        say "  $PROG report --finding"
+    fi
+}
 
 # Records the devbox's host key, because nothing else here ever did.
 #
@@ -823,13 +853,15 @@ cmd_trust_host() {
 
 usage() {
     cat >&2 <<USAGE
-usage: $PROG [check|accept|report|test-alert|trust-host]
+usage: $PROG [check|accept|report [--finding]|test-alert|trust-host]
 
   check       collect from the devbox, diff against the baseline held here,
               alert on any change or on containment failing, and send the
               heartbeat only if the cycle completed clean and could alert
   accept      record the devbox's current state as the baseline
-  report      the last cycle's detail, which is deliberately not in the alert
+  report      the last cycle's detail, which is deliberately not in the alert.
+              --finding shows the most recent cycle that found something, which
+              a later clean cycle would otherwise have overwritten
   test-alert  publish a test alert, then go and check it arrived. Nothing
               else here exercises that path until it is needed
   trust-host  record the devbox's SSH host key, which every other command
@@ -841,7 +873,7 @@ USAGE
 case "${1:-check}" in
     check)      cmd_check ;;
     accept)     cmd_accept ;;
-    report)     cmd_report ;;
+    report)     shift; cmd_report "$@" ;;
     test-alert) cmd_test_alert ;;
     trust-host) shift; cmd_trust_host "$@" ;;
     -h|--help) usage ;;
