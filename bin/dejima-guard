@@ -717,6 +717,27 @@ cmd_test_alert() {
 }
 
 cmd_report() {  # cmd_report [--finding]
+    # AN ARGUMENT THIS COPY DOES NOT KNOW IS AN ERROR, not something to ignore.
+    #
+    # The version before --finding existed dropped every argument at the
+    # dispatch, so `report --finding` printed the last report and looked like
+    # the flag had worked. An operator comparing the two commands saw identical
+    # output and reasonably concluded the feature did nothing, when what it did
+    # was not exist yet in the copy they were running.
+    #
+    # A container makes that easy to be in: `git pull` changes the checkout and
+    # not the image. So an unknown argument says which copy this is.
+    case "${1:-}" in
+        ""|--finding) ;;
+        *) die "unknown argument for report: $1
+
+This copy knows --finding and nothing else. If you expected a flag that is not
+listed, the program answering you is older than the one you read about:
+
+  docker compose up --build -d     # a container
+  sudo ./install.sh                # a host install" ;;
+    esac
+
     if [ "${1:-}" = "--finding" ]; then
         [ -r "$FINDING" ] || { say "no cycle has found anything yet"; return 0; }
         cat "$FINDING"

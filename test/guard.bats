@@ -1350,3 +1350,35 @@ PORT tcp 0.0.0.0:4444" 0
     run_watch report --finding
     [[ "$output" == *"no cycle has found anything yet"* ]]
 }
+
+@test "an argument report does not know is an error, not a no-op" {
+    # The version before --finding dropped every argument at the dispatch, so
+    # `report --finding` printed the last report and looked like the flag had
+    # worked. Identical output from two different commands reads as the feature
+    # doing nothing, when what it did was not exist in the copy being run.
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept
+    run_watch check
+    run_watch report --findings          # a plausible typo
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"unknown argument"* ]]
+}
+
+@test "the unknown-argument message says how to get a newer copy" {
+    # A container makes this easy to be in: git pull changes the checkout and
+    # not the image.
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept
+    run_watch check
+    run_watch report --whatever
+    [[ "$output" == *"--build"* ]]
+    [[ "$output" == *"install.sh"* ]]
+}
+
+@test "report with no argument is still fine" {
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept
+    run_watch check
+    run_watch report
+    [ "$status" -eq 0 ]
+}
