@@ -1298,3 +1298,55 @@ PORT tcp 0.0.0.0:4444" 0
     grep -q 'docker compose run --rm dejima-guard' "$REPO/README.md"
     grep -qi 'no .dejima-guard. on the host' "$REPO/README.md"
 }
+
+# --- the evidence outliving the cycle after it --------------------------------
+#
+# last-report is overwritten every cycle, so a clean one erases the alert before
+# it. On anything that alternates - and a flapping line alternates by definition
+# - an operator running `report` after an alert lands is most likely to catch a
+# clean cycle and read "no changes against the baseline", which says the alert
+# was imaginary.
+
+@test "a clean cycle does not erase the last finding" {
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept
+    stub_ssh "FILE bbb /etc/one" 0          # a change: this cycle alerts
+    run_watch check
+    stub_ssh "FILE bbb /etc/one" 0          # accepted as the new normal? no:
+    run_watch accept                        # re-accept so the next is clean
+    run_watch check
+    run_watch report --finding
+    [[ "$output" == *"/etc/one"* ]]
+}
+
+@test "report says a finding is still there when the last cycle was clean" {
+    # This is exactly when an operator is looking and finding nothing.
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept
+    stub_ssh "FILE bbb /etc/one" 0
+    run_watch check
+    run_watch accept
+    run_watch check
+    run_watch report
+    [[ "$output" == *"no changes against the baseline"* ]]
+    [[ "$output" == *"report --finding"* ]]
+}
+
+@test "report does not point at a finding that is the report" {
+    # After an alerting cycle the two are the same file, and telling somebody to
+    # go and read what they are already reading is noise.
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept
+    stub_ssh "FILE bbb /etc/one" 0
+    run_watch check
+    run_watch report
+    [[ "$output" != *"report --finding"* ]]
+}
+
+@test "--finding with nothing found says so rather than printing the last cycle" {
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept
+    run_watch check
+    run_watch report --finding
+    [[ "$output" == *"no cycle has found anything yet"* ]]
+}
