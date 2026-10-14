@@ -879,8 +879,8 @@ SSHEOF
              | sed 's/^src="//; s/"$//; s/^](//; s/)$//')
     [ "$found" -ge 2 ] || { echo "expected at least the wordmark and the badge"; false; }
 
-    # Both wordmark modes ship, so a mirror on a light-themed host changes one
-    # line rather than needing a file it does not have.
+    # Both wordmark modes ship, because the GitHub mirror picks between them
+    # by the reader's theme.
     [ -f "$REPO/assets/dejima-wordmark-darkmode.png" ]
     [ -f "$REPO/assets/dejima-wordmark-lightmode.png" ]
 }
