@@ -888,9 +888,9 @@ SSHEOF
 @test "the marks are attributed, since the licence here does not cover them" {
     # They are trademarks, and GPL-3.0 says nothing about them. The link is
     # absolute so a fork resolves it to the canonical terms rather than to its
-    # own copy of them.
-    grep -q 'dejima/src/branch/main/ATTRIBUTION.md' "$REPO/README.md"
-    grep -q 'dejima/src/branch/main/ATTRIBUTION.md' "$REPO/assets/README.md"
+    # own copy of them. Either form: the GitHub mirror rewrites Gitea's.
+    grep -qE 'dejima/(src/branch|blob)/main/ATTRIBUTION.md' "$REPO/README.md"
+    grep -qE 'dejima/(src/branch|blob)/main/ATTRIBUTION.md' "$REPO/assets/README.md"
 }
 
 # --- what the alerting setup documents ---------------------------------------
