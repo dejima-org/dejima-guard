@@ -72,8 +72,9 @@ ssh_known_hosts = /var/lib/dejima-guard/known_hosts
 # Paths whose change is reported but not alerted on, space-separated, each
 # matched as a substring of the path. None by default.
 #
-# ~/.ssh/known_hosts is the usual one: it changes whenever the devbox first
-# connects to an SSH host, such as cloning from a new git server. Ignored
+# ~/.ssh/known_hosts is the usual one: it changes when the devbox first
+# connects to an SSH host, and when a host it already knows offers a key not
+# yet recorded, which ssh adds while keeping known_hosts.old. Ignored
 # changes still appear in `dejima-guard report`, and a critical path above is
 # never ignored, whatever this says.
 # ignore_paths = /.ssh/known_hosts

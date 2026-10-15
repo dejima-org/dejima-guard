@@ -428,6 +428,7 @@ describe() {  # describe DIFF_FILE
             if (p ~ /^\/etc\/apt\//)                              return "/etc/apt"
             if (p ~ /^\/etc\/systemd\//)                          return "/etc/systemd"
             if (p ~ /^\/etc\/ssh\//)                              return "/etc/ssh"
+            if (p ~ /^\/etc\/nginx\//)                            return "/etc/nginx"
             if (p ~ /^\/etc\//)                                   return "/etc"
             if (p ~ /^\/usr\/local\/bin\//)                       return "/usr/local/bin"
             if (p ~ /^\/usr\/local\/sbin\//)                      return "/usr/local/sbin"
@@ -447,11 +448,13 @@ describe() {  # describe DIFF_FILE
 }
 
 # Said beside a change to known_hosts, which is the one most often harmless and
-# least obviously so.
+# least obviously so. ssh's UpdateHostKeys, on by default, adds keys a known
+# host offers that are not recorded yet, and keeps the previous file as
+# known_hosts.old: so a familiar host can change it too, as two files.
 known_hosts_note() {  # known_hosts_note DESCRIPTION
     case "$1" in
         *"~/.ssh/known_hosts"*)
-            printf ' known_hosts changes when the devbox first connects to an SSH host it has not seen, such as cloning from a new git server.' ;;
+            printf ' known_hosts changes when the devbox first connects to an SSH host, or when a host it already knows offers a key not yet recorded, which ssh adds while keeping the old file as known_hosts.old.' ;;
     esac
 }
 
