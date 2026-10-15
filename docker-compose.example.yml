@@ -20,6 +20,10 @@ services:
     build: .
     # image: gitbox.example.invalid/dejima/dejima-guard:latest
     container_name: dejima-guard
+    # bin/dejima-guard-docker finds the container by this name. And an init,
+    # because `dejima-guard expect` leaves a process waiting for the window's
+    # end, which needs reaping once it is done.
+    init: true
     restart: unless-stopped
 
     environment:
@@ -70,6 +74,9 @@ services:
       # Seconds between collections. Sets the dead-man's switch granularity
       # and how long an intruder has to notice the monitoring and scrub.
       DEJIMA_GUARD_INTERVAL: "900"
+      # The name of the machine this container runs on, so an alert says
+      # where to go and run `dejima-guard report`. Optional.
+      # DEJIMA_GUARD_GUARD_NAME: your-docker-host
       # Anything secret goes in the config file rather than here. Everything
       # above is visible in `docker inspect` and to anything that can read
       # /proc; a mounted secret is not. The guard reads the environment first

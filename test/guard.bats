@@ -1382,3 +1382,217 @@ PORT tcp 0.0.0.0:4444" 0
     run_watch report
     [ "$status" -eq 0 ]
 }
+
+# --- what changed, in words the guard chose ------------------------------------
+
+@test "the alert says where a change is and what kind, never the path" {
+    stub_ssh "FILE aaa /home/intruder-chosen/.ssh/known_hosts" 0
+    run_watch accept
+    curl_reset
+    stub_ssh "FILE bbb /home/intruder-chosen/.ssh/known_hosts
+FILE ccc /etc/apt/sources.list.d/new.list" 0
+    run_watch check
+    [[ "$(curl_log)" == *"1 file(s) modified in ~/.ssh/known_hosts"* ]]
+    [[ "$(curl_log)" == *"1 file(s) added in /etc/apt"* ]]
+    [[ "$(curl_log)" == *"first connects to an SSH host"* ]]
+    [[ "$(curl_log)" != *intruder-chosen* ]]
+    [[ "$(curl_log)" != *new.list* ]]
+}
+
+@test "the report pairs an edit into one modified line" {
+    stub_ssh "FILE aaa /etc/one
+FILE ddd /etc/gone" 0
+    run_watch accept
+    stub_ssh "FILE bbb /etc/one
+FILE ccc /etc/two" 0
+    run_watch check
+    run_watch report
+    [[ "$output" == *"modified  FILE  /etc/one"* ]]
+    [[ "$output" == *"added     FILE  /etc/two"* ]]
+    [[ "$output" == *"removed   FILE  /etc/gone"* ]]
+}
+
+@test "the alert names the guard and the command to run, when configured" {
+    export DEJIMA_GUARD_GUARD_NAME=nas
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept
+    stub_ssh "FILE bbb /etc/one" 0
+    run_watch check
+    [[ "$(curl_log)" == *"Details: dejima-guard report, on nas."* ]]
+}
+
+# --- ignore_paths ----------------------------------------------------------------
+
+@test "an ignored path does not alert, and the cycle is clean" {
+    export DEJIMA_GUARD_IGNORE_PATHS='/.ssh/known_hosts'
+    stub_ssh "FILE aaa /home/u/.ssh/known_hosts" 0
+    run_watch accept
+    curl_reset
+    stub_ssh "FILE bbb /home/u/.ssh/known_hosts" 0
+    run_watch check
+    [ "$status" -eq 0 ]
+    [ "$(alerts)" = 0 ]
+    [ "$(heartbeats)" = 1 ]
+    run_watch report
+    [[ "$output" == *"ignored (ignore_paths):"* ]]
+    [[ "$output" == *"/home/u/.ssh/known_hosts"* ]]
+}
+
+@test "ignore_paths cannot hide a critical path" {
+    export DEJIMA_GUARD_IGNORE_PATHS='/.ssh/'
+    stub_ssh "FILE aaa /home/u/.ssh/authorized_keys" 0
+    run_watch accept
+    stub_ssh "FILE bbb /home/u/.ssh/authorized_keys" 0
+    run_watch check
+    [ "$status" -ne 0 ]
+    [[ "$(curl_log)" == *"watched path changed"* ]]
+}
+
+# --- expected-changes windows -------------------------------------------------
+
+open_window() { printf '%s\n' "$(( $(date +%s) + $1 ))" > "$DEJIMA_GUARD_STATE/expect-until"; }
+
+@test "inside a window a change is held, and the heartbeat still goes" {
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept
+    curl_reset
+    open_window 600
+    stub_ssh "FILE bbb /etc/one" 0
+    run_watch check
+    [ "$status" -eq 0 ]
+    [ "$(alerts)" = 0 ]
+    [ "$(heartbeats)" = 1 ]
+    run_watch report
+    [[ "$output" == *"result: held"* ]]
+}
+
+@test "inside a window an unreachable devbox is held, without a heartbeat" {
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept
+    curl_reset
+    open_window 600
+    stub_ssh "" 0 255
+    run_watch check
+    [ "$status" -ne 0 ]
+    [ "$(alerts)" = 0 ]
+    [ "$(heartbeats)" = 0 ]
+}
+
+@test "inside a window a critical path and containment still alert" {
+    stub_ssh "FILE aaa /etc/ssh/sshd_config" 0
+    run_watch accept
+    curl_reset
+    open_window 600
+    stub_ssh "FILE bbb /etc/ssh/sshd_config" 0
+    run_watch check
+    [[ "$(curl_log)" == *"watched path changed"* ]]
+    curl_reset
+    stub_ssh "FILE aaa /etc/ssh/sshd_config" 1
+    run_watch check
+    [[ "$(curl_log)" == *"containment"* ]]
+}
+
+@test "a window that has ended accepts, except critical paths" {
+    stub_ssh "FILE aaa /etc/one
+FILE aaa /etc/ssh/sshd_config" 0
+    run_watch accept
+    curl_reset
+    open_window -1
+    stub_ssh "FILE bbb /etc/one
+FILE bbb /etc/ssh/sshd_config" 0
+    run_watch check
+    [ ! -f "$DEJIMA_GUARD_STATE/expect-until" ]
+    grep -q 'FILE bbb /etc/one' "$DEJIMA_GUARD_STATE/baseline"
+    grep -q 'FILE aaa /etc/ssh/sshd_config' "$DEJIMA_GUARD_STATE/baseline"
+    [[ "$(curl_log)" == *"expected changes accepted"* ]]
+    [[ "$(curl_log)" == *"Priority: low"* ]]
+    [[ "$(curl_log)" == *"watched path changed"* ]]
+    run_watch report --finding
+    [[ "$output" == *"accepted as the expected-changes window closed"* ]]
+}
+
+@test "a window that ends with the devbox unreachable accepts nothing" {
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept
+    curl_reset
+    open_window -1
+    stub_ssh "" 0 255
+    run_watch check
+    [ ! -f "$DEJIMA_GUARD_STATE/expect-until" ]
+    [[ "$(curl_log)" == *"unreachable"* ]]
+    stub_ssh "FILE bbb /etc/one" 0
+    run_watch check
+    [[ "$(curl_log)" == *"unexplained changes"* ]]
+}
+
+@test "expect accepts at the end of the window, not at the next cycle" {
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept
+    run_watch expect 1s
+    [ "$status" -eq 0 ]
+    stub_ssh "FILE bbb /etc/one" 0
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        grep -q 'FILE bbb' "$DEJIMA_GUARD_STATE/baseline" && break
+        sleep 1
+    done
+    grep -q 'FILE bbb /etc/one' "$DEJIMA_GUARD_STATE/baseline"
+    [ ! -f "$DEJIMA_GUARD_STATE/expect-until" ]
+}
+
+@test "expect refuses a nonsense duration, an endless one, and no baseline" {
+    run_watch expect 30m
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no baseline"* ]]
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept
+    run_watch expect soon
+    [ "$status" -ne 0 ]
+    run_watch expect 25h
+    [ "$status" -ne 0 ]
+    [ ! -f "$DEJIMA_GUARD_STATE/expect-until" ]
+}
+
+@test "accept closes a window and checks, so the heartbeat resumes" {
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept
+    open_window 600
+    curl_reset
+    run_watch accept
+    [ "$status" -eq 0 ]
+    [ ! -f "$DEJIMA_GUARD_STATE/expect-until" ]
+    [ "$(heartbeats)" = 1 ]
+}
+
+@test "expect --cancel closes a window without accepting" {
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept
+    open_window 600
+    run_watch expect --cancel
+    [ ! -f "$DEJIMA_GUARD_STATE/expect-until" ]
+    stub_ssh "FILE bbb /etc/one" 0
+    run_watch check
+    [[ "$(curl_log)" == *"unexplained changes"* ]]
+}
+
+@test "status shows the baseline, the last check and the window" {
+    stub_ssh "FILE aaa /etc/one" 0
+    run_watch accept
+    open_window 600
+    run_watch status
+    [[ "$output" == *"1 entries"* ]]
+    [[ "$output" == *"last check:"*"clean"* ]]
+    [[ "$output" == *"expecting changes until"* ]]
+}
+
+# --- the container host's wrapper --------------------------------------------
+
+@test "the docker wrapper runs the guard in its container, from anywhere" {
+    cat > "$STUB/docker" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" > "$BATS_TEST_TMPDIR/docker.args"
+EOF
+    chmod +x "$STUB/docker"
+    cd "$BATS_TEST_TMPDIR"
+    PATH="$STUB:$PATH" run "$REPO/bin/dejima-guard-docker" accept < /dev/null
+    [ "$(cat "$BATS_TEST_TMPDIR/docker.args")" = "exec -i dejima-guard dejima-guard accept" ]
+}

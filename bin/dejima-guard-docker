@@ -1,0 +1,19 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Brad Anderson
+#
+# dejima-guard, run inside its container, from any directory.
+#
+# Install on the container host as `dejima-guard`, so the commands read the same
+# there as everywhere else:
+#
+#   sudo install -m 0755 bin/dejima-guard-docker /usr/local/bin/dejima-guard
+#
+# `docker exec` by container name rather than `docker compose exec`, which only
+# works from the directory holding the compose file. The name is the
+# container_name the example compose file sets.
+
+container=${DEJIMA_GUARD_CONTAINER:-dejima-guard}
+
+if [ -t 0 ] && [ -t 1 ]; then tty=-it; else tty=-i; fi
+exec docker exec "$tty" "$container" dejima-guard "$@"

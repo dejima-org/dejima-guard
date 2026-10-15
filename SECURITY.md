@@ -88,9 +88,13 @@ than discovering:
 - **It does not catch an intruder who anticipated it.** The devbox-side audit
   can be lied to by root on the devbox. This catches a payload that did not
   think to look, which is most of them.
-- **It sends no detail off this machine.** Alert bodies carry counts and
-  categories, never a filename or a unit name, because the devbox chooses those
-  strings. The detail stays in `dejima-guard report`.
+- **It sends no paths off this machine.** Alert bodies carry counts and the
+  watched area a change falls under, printed from a fixed list in the guard,
+  never a filename or a unit name, because the devbox chooses those strings.
+  The detail stays in `dejima-guard report`.
+- **An expected-changes window is opened on the guard, never by the devbox.**
+  One the devbox could open would let it silence its own guard. A window never
+  holds or accepts a change to a critical path, or a containment failure.
 - **It treats what the devbox says as untrusted input**, including in that
   report: control characters are replaced as the text is collected, since a
   filename can carry an escape sequence and the report is read on the machine
