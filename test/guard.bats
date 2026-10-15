@@ -879,8 +879,8 @@ SSHEOF
              | sed 's/^src="//; s/"$//; s/^](//; s/)$//')
     [ "$found" -ge 2 ] || { echo "expected at least the wordmark and the badge"; false; }
 
-    # Both wordmark modes ship, so a mirror on a light-themed host changes one
-    # line rather than needing a file it does not have.
+    # Both wordmark modes ship, because the GitHub mirror picks between them
+    # by the reader's theme.
     [ -f "$REPO/assets/dejima-wordmark-darkmode.png" ]
     [ -f "$REPO/assets/dejima-wordmark-lightmode.png" ]
 }
@@ -888,9 +888,9 @@ SSHEOF
 @test "the marks are attributed, since the licence here does not cover them" {
     # They are trademarks, and GPL-3.0 says nothing about them. The link is
     # absolute so a fork resolves it to the canonical terms rather than to its
-    # own copy of them.
-    grep -q 'dejima/src/branch/main/ATTRIBUTION.md' "$REPO/README.md"
-    grep -q 'dejima/src/branch/main/ATTRIBUTION.md' "$REPO/assets/README.md"
+    # own copy of them. Either form: the GitHub mirror rewrites Gitea's.
+    grep -qE 'dejima/(src/branch|blob)/main/ATTRIBUTION.md' "$REPO/README.md"
+    grep -qE 'dejima/(src/branch|blob)/main/ATTRIBUTION.md' "$REPO/assets/README.md"
 }
 
 # --- what the alerting setup documents ---------------------------------------
