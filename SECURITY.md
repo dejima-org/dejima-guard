@@ -7,8 +7,8 @@ tells you. It is a second opinion, not a boundary.
 
 **It prevents nothing.** Everything it reports has already happened. The
 controls that bound a compromise are
-[dejima](https://gitbox.branderson.io/dejima/dejima)'s and
-[dejima-devbox-hardener](https://gitbox.branderson.io/dejima/dejima-devbox-hardener)'s;
+[dejima](https://github.com/dejima-org/dejima)'s and
+[dejima-devbox-hardener](https://github.com/dejima-org/dejima-devbox-hardener)'s;
 this only reports on the machine those two are protecting.
 
 What it does claim is that its answer is hard to suppress from the devbox: the
@@ -31,7 +31,7 @@ of privilege that did not exist before you ran it.
 
 The key is restricted at the devbox end rather than trusted here, which is the
 half that matters: see
-["Let the guard in"](https://gitbox.branderson.io/dejima/dejima-devbox-hardener/src/branch/main/docs/building-a-devbox.md#guard-access).
+["Let the guard in"](https://github.com/dejima-org/dejima-devbox-hardener/blob/main/docs/building-a-devbox.md#guard-access).
 `dejima-guard-install-key` proves the restriction rather than assuming it.
 
 ## What actually bounds this
@@ -118,7 +118,7 @@ time; you will get an acknowledgement when it is seen, and credit if you want
 it.
 
 The organisation-wide policy, including what the sister projects claim, is
-[dejima's SECURITY.md](https://gitbox.branderson.io/dejima/dejima/src/branch/main/SECURITY.md).
+[dejima's SECURITY.md](https://github.com/dejima-org/dejima/blob/main/SECURITY.md).
 
 ## No warranty
 

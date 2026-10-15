@@ -18,9 +18,13 @@
      inline and indents the image by one space. -->
 &nbsp;
 
-&nbsp;<img src="assets/dejima-wordmark-darkmode.png" alt="dejima" height="72">
+&nbsp;<picture><source media="(prefers-color-scheme: dark)" srcset="assets/dejima-wordmark-darkmode.png"><img src="assets/dejima-wordmark-lightmode.png" alt="dejima" height="72"></picture>
 
 ---
+
+> **This is a read-only mirror.** dejima is developed on a private forge,
+> and issues and pull requests are not accepted here. See
+> [CONTRIBUTING.md](https://github.com/dejima-org/dejima/blob/main/CONTRIBUTING.md).
 
 &nbsp;
 
@@ -30,12 +34,12 @@ Notices when a devbox changes, and tells you, from a machine that is not the
 devbox.
 
 A devbox has no upper bound on how long a compromise lasts. Its sister project,
-[dejima-ci-hardener](https://gitbox.branderson.io/dejima/dejima-ci-hardener),
+[dejima-ci-hardener](https://github.com/dejima-org/dejima-ci-hardener),
 rebuilds a runner from a snapshot on a schedule, so anything that gets in has
 until the next rebuild. A devbox holds uncommitted work and is never rebuilt.
 Nothing reclaims it and nothing is looking.
 
-[dejima-devbox-hardener](https://gitbox.branderson.io/dejima/dejima-devbox-hardener)
+[dejima-devbox-hardener](https://github.com/dejima-org/dejima-devbox-hardener)
 made the box report what changed. This is the part that reads those reports and
 wakes you up.
 
@@ -48,7 +52,7 @@ detail: see [Why it pulls](#why-it-pulls).
 | [Why it pulls](#why-it-pulls) | The three things the inversion buys |
 | [What it does not do](#what-it-does-not-do) | Read this before relying on it |
 
-[![Developed in dejima](assets/dejima-badge.svg)](https://gitbox.branderson.io/dejima/dejima)
+[![Developed in dejima](assets/dejima-badge.svg)](https://github.com/dejima-org/dejima)
 
 ---
 
@@ -104,7 +108,7 @@ It authenticates to the devbox the ordinary way, so expect a password prompt:
 the guard's key is what it installs, not what it uses. It then tries four
 commands with the new key and reports whether the restriction holds. It needs
 `dejima-guard-shell` and a sudoers rule on the devbox, both from
-["Let the guard in"](https://gitbox.branderson.io/dejima/dejima-devbox-hardener/src/branch/main/docs/building-a-devbox.md#guard-access);
+["Let the guard in"](https://github.com/dejima-org/dejima-devbox-hardener/blob/main/docs/building-a-devbox.md#guard-access);
 if either is missing it says which.
 
 Then the devbox's host key, which nothing else records and every other command
@@ -525,4 +529,4 @@ GPL-3.0-or-later. See [LICENSE](LICENSE).
 The dejima wordmark and logo are not code and are not covered by that licence.
 They are trademarks; who holds them and what may be done with them is stated
 once for the organisation, at
-[dejima's ATTRIBUTION.md](https://gitbox.branderson.io/dejima/dejima/src/branch/main/ATTRIBUTION.md).
+[dejima's ATTRIBUTION.md](https://github.com/dejima-org/dejima/blob/main/ATTRIBUTION.md).
