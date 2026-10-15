@@ -460,8 +460,9 @@ the path like `critical_paths`:
 ignore_paths = /.ssh/known_hosts
 ```
 
-`~/.ssh/known_hosts` is the usual candidate. It changes whenever the devbox
-first connects to an SSH host, such as cloning from a new git server. Ignored
+`~/.ssh/known_hosts` is the usual candidate. It changes when the devbox first
+connects to an SSH host, and when a host it already knows offers a key not yet
+recorded: ssh adds it and keeps the old file as `known_hosts.old`. Ignored
 changes still show in `report`, under their own heading, and a critical path
 cannot be ignored.
 

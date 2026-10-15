@@ -1394,9 +1394,19 @@ FILE ccc /etc/apt/sources.list.d/new.list" 0
     run_watch check
     [[ "$(curl_log)" == *"1 file(s) modified in ~/.ssh/known_hosts"* ]]
     [[ "$(curl_log)" == *"1 file(s) added in /etc/apt"* ]]
-    [[ "$(curl_log)" == *"first connects to an SSH host"* ]]
+    [[ "$(curl_log)" == *"a host it already knows offers a key"* ]]
     [[ "$(curl_log)" != *intruder-chosen* ]]
     [[ "$(curl_log)" != *new.list* ]]
+}
+
+@test "remote access's nginx config is named as its own area" {
+    # dejima documents /etc/nginx for remote access on the devbox, so a change
+    # there is common and worth telling apart from the rest of /etc.
+    stub_ssh "FILE aaa /etc/nginx/sites-available/dejima" 0
+    run_watch accept
+    stub_ssh "FILE bbb /etc/nginx/sites-available/dejima" 0
+    run_watch check
+    [[ "$(curl_log)" == *"1 file(s) modified in /etc/nginx"* ]]
 }
 
 @test "the report pairs an edit into one modified line" {
