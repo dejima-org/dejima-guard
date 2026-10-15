@@ -369,21 +369,98 @@ LAST="$STATE_DIR/last-report"
 # is most likely to catch a clean cycle and see "no changes against the
 # baseline", which reads as the alert having been imaginary.
 FINDING="$STATE_DIR/last-finding"
+# The end of an expected-changes window, in epoch seconds. See cmd_expect.
+WINDOW="$STATE_DIR/expect-until"
 
-# Categories rather than paths, because the body of an alert must carry nothing
-# the watched machine chose. A count of changed unit files is safe to send; the
-# name of one is not.
-summarise() {  # summarise DIFF_FILE
-    local f=$1 n_file n_unit n_port n_link
-    n_file=$(grep -c '^[+-] FILE ' "$f" || true)
-    n_unit=$(grep -c '^[+-] UNIT ' "$f" || true)
-    n_port=$(grep -c '^[+-] PORT ' "$f" || true)
-    n_link=$(grep -c '^[+-] LINK ' "$f" || true)
-    [ "$n_file" -gt 0 ] && printf '%s file(s)\n' "$n_file"
-    [ "$n_link" -gt 0 ] && printf '%s symlink(s)\n' "$n_link"
-    [ "$n_unit" -gt 0 ] && printf '%s systemd unit(s)\n' "$n_unit"
-    [ "$n_port" -gt 0 ] && printf '%s listening port(s)\n' "$n_port"
-    return 0
+# Sorted here rather than trusted to arrive sorted, so a baseline this program
+# rewrote compares line for line with what the devbox sends next.
+statediff() {  # statediff OLD NEW
+    diff --unchanged-line-format= --old-line-format='- %L' --new-line-format='+ %L' \
+        <(LC_ALL=C sort "$1") <(LC_ALL=C sort "$2") || true
+}
+
+# One line per thing that changed: STATUS<TAB>KIND<TAB>KEY.
+#
+# An edited file is two diff lines, its old hash removed and its new one added,
+# which read as a deletion and a creation. Paired by what the line is about, an
+# edit says "modified".
+changes() {  # changes DIFF_FILE
+    awk '
+        {
+            sign = substr($0, 1, 1); kind = $2; key = $0
+            sub(/^[+-] [A-Z]+ /, "", key)
+            if (kind == "FILE") sub(/^[^ ]+ +/, "", key)
+            else if (kind == "LINK") sub(/ -> .*/, "", key)
+            id = kind SUBSEP key
+            if (!(id in seen)) order[++n] = id
+            seen[id] = seen[id] sign
+        }
+        END {
+            for (i = 1; i <= n; i++) {
+                split(order[i], p, SUBSEP); s = seen[order[i]]
+                st = (s ~ /-/ && s ~ /\+/) ? "modified" : (s ~ /\+/ ? "added" : "removed")
+                printf "%s\t%s\t%s\n", st, p[1], p[2]
+            }
+        }' "$1"
+}
+
+changes_table() {  # changes_table DIFF_FILE
+    changes "$1" | awk -F '\t' '{ printf "  %-9s %-5s %s\n", $1, $2, $3 }'
+}
+
+# What changed, in words this program chose, for the body of an alert.
+#
+# The devbox names every path, so no path goes in a push. What goes instead is
+# the watched area it falls under, printed from the fixed list below and never
+# from the path itself: a home directory or filename an intruder chose cannot
+# ride along. A count of changed unit files is safe to send; the name of one is
+# not.
+describe() {  # describe DIFF_FILE
+    changes "$1" | awk -F '\t' '
+        function area(p) {
+            if (p ~ /^\/home\/[^\/]+\/\.ssh\/known_hosts/)        return "~/.ssh/known_hosts"
+            if (p ~ /^\/home\/[^\/]+\/\.ssh\//)                   return "~/.ssh"
+            if (p ~ /^\/home\/[^\/]+\/\.config\/systemd\/user\//) return "~/.config/systemd/user"
+            if (p ~ /^\/home\/[^\/]+\/\.local\/bin\//)            return "~/.local/bin"
+            if (p ~ /^\/home\/[^\/]+\/\.[^\/]+$/)                 return "shell startup files"
+            if (p ~ /^\/root\/\.ssh\//)                           return "/root/.ssh"
+            if (p ~ /^\/var\/spool\/cron\//)                      return "crontabs"
+            if (p ~ /^\/etc\/apt\//)                              return "/etc/apt"
+            if (p ~ /^\/etc\/systemd\//)                          return "/etc/systemd"
+            if (p ~ /^\/etc\/ssh\//)                              return "/etc/ssh"
+            if (p ~ /^\/etc\//)                                   return "/etc"
+            if (p ~ /^\/usr\/local\/bin\//)                       return "/usr/local/bin"
+            if (p ~ /^\/usr\/local\/sbin\//)                      return "/usr/local/sbin"
+            return "other paths"
+        }
+        {
+            if ($2 == "UNIT")      g = "unit(s) " ($1 == "added" ? "enabled" : "disabled")
+            else if ($2 == "PORT") g = "listening port(s) " ($1 == "added" ? "opened" : "closed")
+            else g = ($2 == "LINK" ? "symlink(s) " : "file(s) ") $1 " in " area($3)
+            if (!(g in c)) order[++n] = g
+            c[g]++
+        }
+        END {
+            for (i = 1; i <= n && i <= 8; i++) printf "%s %s\n", c[order[i]], order[i]
+            if (n > 8) printf "%s more kind(s) of change\n", n - 8
+        }' | paste -sd ';' - | sed 's/;/, /g'
+}
+
+# Said beside a change to known_hosts, which is the one most often harmless and
+# least obviously so.
+known_hosts_note() {  # known_hosts_note DESCRIPTION
+    case "$1" in
+        *"~/.ssh/known_hosts"*)
+            printf ' known_hosts changes when the devbox first connects to an SSH host it has not seen, such as cloning from a new git server.' ;;
+    esac
+}
+
+# Where to read the rest. guard_name comes from this machine's config, so it is
+# as safe to send as the devbox's own configured name.
+details_hint() {
+    local g
+    g=$(cfg guard_name)
+    printf ' Details: %s report%s.' "$PROG" "${g:+, on $g}"
 }
 
 # Paths whose change is a different kind of event from a config edit.
@@ -412,6 +489,44 @@ critical_hits() {  # critical_hits DIFF_FILE -> matching lines
         grep -F -- "$pat" "$f" || true
     done <<< "$(cfg critical_paths "$CRITICAL_DEFAULT")"
 }
+
+# Moves the lines an operator has said are not worth waking for out of the
+# diff. They stay in the report, under their own heading.
+#
+# A critical path is never ignored. Ignoring the file that keeps the guard's
+# access read-only would be a way to stop watching the guard's own footing.
+ignore_split() {  # ignore_split DIFF_FILE IGNORED_FILE
+    local pats=$2.pats crit=$2.crit
+    cfg ignore_paths | tr -s '[:space:]' '\n' | grep . > "$pats" || true
+    critical_hits "$1" > "$crit"
+    grep -F -f "$pats" "$1" | grep -vxF -f "$crit" > "$2" || true
+    grep -vxF -f "$2" "$1" > "$1.keep" || true
+    mv "$1.keep" "$1"
+    rm -f "$pats" "$crit"
+}
+
+# The baseline an expected-changes window ends with: everything collected now,
+# except lines under a critical path, which keep their old value so the check
+# still alerts on them. Those are accepted by hand or not at all.
+accept_window() {  # accept_window NOW_FILE
+    local pats=$1.crit
+    cfg critical_paths "$CRITICAL_DEFAULT" | grep . > "$pats" || true
+    { grep -vF -f "$pats" "$1"; grep -F -f "$pats" "$BASE"; } \
+        | LC_ALL=C sort > "$BASE.new" || true
+    rm -f "$pats"
+    grep -q . "$BASE.new" || { rm -f "$BASE.new"; return 1; }
+    mv "$BASE.new" "$BASE"
+}
+
+window_end() {
+    local e
+    [ -r "$WINDOW" ] || return 0
+    e=$(head -1 "$WINDOW")
+    case "$e" in ''|*[!0-9]*) return 0 ;; esac
+    printf '%s\n' "$e"
+}
+
+clock() { date -d "@$1" +'%H:%M %Z'; }
 
 # A listener or an enabled unit that was not there before is not a config edit.
 #
@@ -487,10 +602,17 @@ require_config() {
 }
 
 cmd_check() {
-    local rc=0 now reach_rc reach_out changed=0 body=""
+    local rc=0 now reach_rc reach_out changed=0 body="" held=0 wend window=none
     require_config
     install -d -m 0750 "$STATE_DIR"
     now=$(mktemp) || die "no temp space"
+
+    # An expected-changes window is open until its end, and closing once it has
+    # passed. The check that finds it closing is the one that accepts.
+    wend=$(window_end)
+    if [ -n "$wend" ]; then
+        if [ "$(date +%s)" -lt "$wend" ]; then window=open; else window=closing; fi
+    fi
 
     # 1. Can it be reached at all?
     #
@@ -499,7 +621,7 @@ cmd_check() {
     local ssh_err
     ssh_err=$(mktemp) || die "no temp space"
     # shellcheck disable=SC2064
-    trap "rm -f '$now' '$now.diff' '$ssh_err'" EXIT
+    trap "rm -f '$now' '$now.raw' '$now.diff' '$now.ignored' '$now.old' '$now.accepted' '$ssh_err'" EXIT
 
     # ssh's own words are kept, not sent to /dev/null. They were, and the alert
     # offered three guesses instead - so the one failure that stops this program
@@ -522,6 +644,20 @@ cmd_check() {
 
     if [ "$crc" -ne 0 ]; then
         sanitise < "$ssh_err" > "$ssh_err.clean" && mv "$ssh_err.clean" "$ssh_err"
+        # A reboot is part of most updates, so inside a window this is held
+        # rather than sent. No heartbeat either way: nothing was checked.
+        if [ "$window" = open ]; then
+            say "HELD: could not reach $(target), inside the expected-changes window"
+            say "  until $(clock "$wend"). ssh said:"
+            sed 's/^/  /' "$ssh_err" >&2
+            return 1
+        fi
+        # A window ends at its end, reachable or not. Accepting whatever the box
+        # says when it next answers, hours later, is not what was expected.
+        if [ "$window" = closing ]; then
+            rm -f "$WINDOW"
+            say "The expected-changes window has ended with nothing to accept."
+        fi
         alert max "$(target_short): unreachable" \
             "dejima-guard could not collect from $(target). It may be down, off the network, or refusing this key." || true
         say "FAIL: could not reach $(target). ssh said:"
@@ -583,13 +719,27 @@ cmd_check() {
         return 1
     fi
 
-    diff --unchanged-line-format= --old-line-format='- %L' --new-line-format='+ %L' \
-        "$BASE" "$now" > "$now.diff" || true
+    statediff "$BASE" "$now" > "$now.diff"
+
+    local accepted=""
+    if [ "$window" = closing ]; then
+        cp "$BASE" "$now.old"
+        accept_window "$now" || say "Nothing usable to accept as the window closed."
+        rm -f "$WINDOW"
+        statediff "$now.old" "$BASE" > "$now.accepted"
+        statediff "$BASE" "$now" > "$now.diff"
+        accepted=$(describe "$now.accepted")
+        alert low "$(target_short): expected changes accepted" \
+            "The expected-changes window on $(target) has closed. Accepted: ${accepted:-nothing had changed}.$(known_hosts_note "$accepted")" || true
+    fi
+
+    ignore_split "$now.diff" "$now.ignored"
 
     if [ -s "$now.diff" ]; then
         changed=1
-        body=$(summarise "$now.diff" | paste -sd', ' -)
+        body=$(describe "$now.diff")
     fi
+    [ "$window" = open ] && [ "$changed" = 1 ] && held=1
 
     # 4. One alert per cycle, batching every finding.
     #
@@ -606,19 +756,21 @@ cmd_check() {
         # No path names in the body. The devbox chose those strings, and the
         # count plus the category is enough to say go and read the report.
         alert max "$(target_short): watched path changed" \
-            "$crit_n line(s) changed under paths this guard treats as its own footing on $(target), including possibly the audit it collects with. Treat what it has reported since as unverified." || true
+            "$crit_n line(s) changed under paths this guard treats as its own footing on $(target), including possibly the audit it collects with. Treat what it has reported since as unverified.$(details_hint)" || true
         rc=1
     elif [ "$changed" = 1 ] && [ "$reach_rc" -ne 0 ]; then
         alert max "$(target_short): changes and containment" \
-            "On $(target): $body changed, and the containment check did not pass." || true
+            "On $(target): $body, and the containment check did not pass.$(details_hint)" || true
         rc=1
+    elif [ "$held" = 1 ]; then
+        say "HELD: changes on $(target), inside the expected-changes window until $(clock "$wend")."
     elif [ "$newp" -gt 0 ]; then
         alert max "$(target_short): new listener or unit" \
-            "On $(target): $body changed, and $newp of them is something newly arranged to run or to be reached." || true
+            "On $(target): $body. $newp of them is something newly arranged to run or to be reached.$(details_hint)" || true
         rc=1
     elif [ "$changed" = 1 ]; then
         alert high "$(target_short): unexplained changes" \
-            "On $(target): $body changed since the last accepted state." || true
+            "On $(target), since the last accepted state: $body.$(known_hosts_note "$body")$(details_hint)" || true
         rc=1
     elif [ "$reach_rc" -ne 0 ]; then
         alert high "$(target_short): containment" \
@@ -626,19 +778,32 @@ cmd_check() {
         rc=1
     fi
 
+    local result=clean
+    [ "$rc" -eq 0 ] || result=alerted
+    [ "$held" = 0 ] || result="held, expected-changes window open until $(clock "$wend")"
     {
         printf '%s\n' "--- collected $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+        printf 'result: %s\n' "$result"
         printf 'reach exit: %s\n%s\n\n' "$reach_rc" "$reach_out"
+        if [ -s "$now.accepted" ]; then
+            printf 'accepted as the expected-changes window closed:\n'
+            changes_table "$now.accepted"; printf '\n'
+        fi
         if [ "$changed" = 1 ]; then
-            printf 'changes against the baseline:\n'; cat "$now.diff"
+            printf 'changes against the baseline:\n'; changes_table "$now.diff"
+            printf '\nas collected:\n'; cat "$now.diff"
         else
             printf 'no changes against the baseline\n'
+        fi
+        if [ -s "$now.ignored" ]; then
+            printf '\nignored (ignore_paths):\n'; changes_table "$now.ignored"
         fi
     } > "$LAST"
 
     # Kept only when there was something to keep, so it is not overwritten by
-    # the next quiet cycle. This is the copy an alert is telling you to read.
-    [ "$rc" -eq 0 ] || cp "$LAST" "$FINDING"
+    # the next quiet cycle. This is the copy an alert is telling you to read,
+    # and a closing window's is the record of what it let through.
+    if [ "$rc" -ne 0 ] || [ -s "$now.accepted" ]; then cp "$LAST" "$FINDING"; fi
 
     if [ "$ALERT_FAILED" = 1 ]; then
         # No heartbeat, deliberately.
@@ -655,7 +820,7 @@ cmd_check() {
     fi
 
     if [ "$rc" -eq 0 ]; then
-        say "CLEAN: no changes, containment passed."
+        [ "$held" = 1 ] || say "CLEAN: no changes, containment passed."
         # Only on a cycle that completed and found nothing wrong. Pinging in a
         # failure path would tell the dead-man's switch that all is well at the
         # exact moment it is not.
@@ -685,9 +850,87 @@ cmd_accept() {
     [ "$crc" -eq 0 ] || die "could not collect from the devbox"
     grep -q . "$raw" || die "the devbox returned nothing - not accepting that as a baseline"
     sanitise < "$raw" > "$BASE"
+    rm -f "$raw" "$err" "$WINDOW"
+    trap - EXIT
     say "Baseline accepted: $(grep -c . "$BASE") entries in $BASE"
     say "  Take it on a box you believe is clean. One taken on a compromised"
     say "  machine records the compromise as normal and reports clean forever."
+
+    # A check straight after, so the heartbeat resumes now rather than at the
+    # next cycle, and the report reflects what was just accepted.
+    say ""
+    cmd_check
+}
+
+# Says changes are coming, so an update does not page anyone.
+#
+# Opened HERE, on the guard, and never from the devbox. A devbox that could say
+# "expect changes" is a devbox that could silence its own guard.
+#
+# Until the window ends, changes and the devbox being unreachable are held
+# rather than sent. Critical paths and containment still alert, since a change
+# there is worth a push even during maintenance, and a window never accepts a
+# critical path. At the end the rest of the devbox's state is accepted, by a
+# check started now to run then rather than by whichever cycle of the timer
+# comes next. If that check is lost, to a container restart say, the first
+# check after the end does the same.
+cmd_expect() {  # cmd_expect [DURATION|--cancel]
+    local d=${1:-30m} n secs wend
+    [ -f "$BASE" ] || die "no baseline yet - run $PROG accept first"
+    if [ "$d" = --cancel ]; then
+        rm -f "$WINDOW"
+        say "Expected-changes window closed, nothing accepted. Changes will alert."
+        return 0
+    fi
+    n=${d%[smh]}
+    case "$n" in ''|*[!0-9]*) die "expect takes a duration like 30m, 2h or 90s - got '$d'" ;; esac
+    case "$d" in
+        *h) secs=$((n * 3600)) ;;
+        *s) secs=$n ;;
+        *)  secs=$((n * 60)) ;;
+    esac
+    [ "$secs" -le 86400 ] || die "refusing a window over 24h: that is not watching"
+    wend=$(( $(date +%s) + secs ))
+    printf '%s\n' "$wend" > "$WINDOW"
+
+    # fd 9 is the lock, closed so the waiting check does not hold it while it
+    # sleeps.
+    setsid -f sh -c 'sleep "$1"; exec "$2" check' sh "$secs" "$0" \
+        </dev/null >/dev/null 2>&1 9>&-
+
+    say "Expecting changes on $(target) until $(clock "$wend")."
+    say "  Changes and the devbox being unreachable are held until then. Critical"
+    say "  paths and containment still alert. At $(clock "$wend") the state is accepted"
+    say "  and a low-priority note says what changed."
+    say ""
+    say "  Done early:   $PROG accept"
+    say "  Call it off:  $PROG expect --cancel"
+}
+
+cmd_status() {
+    local wend
+    if [ -f "$BASE" ]; then
+        printf 'baseline:    accepted %s, %s entries\n' \
+            "$(date -u -r "$BASE" +'%Y-%m-%dT%H:%M:%SZ')" "$(grep -c . "$BASE")"
+    else
+        printf 'baseline:    none - run %s accept\n' "$PROG"
+    fi
+    if [ -r "$LAST" ]; then
+        printf 'last check:  %s, %s\n' "$(sed -n 's/^--- collected //p' "$LAST" | head -1)" \
+            "$(sed -n 's/^result: //p' "$LAST" | head -1)"
+    else
+        printf 'last check:  none\n'
+    fi
+    wend=$(window_end)
+    if [ -n "$wend" ]; then
+        printf 'window:      expecting changes until %s\n' "$(clock "$wend")"
+    else
+        printf 'window:      none\n'
+    fi
+    if [ -r "$FINDING" ]; then
+        printf 'last finding: %s (%s report --finding)\n' \
+            "$(sed -n 's/^--- collected //p' "$FINDING" | head -1)" "$PROG"
+    fi
 }
 
 # The alert path is the one thing here nothing else exercises.
@@ -874,12 +1117,16 @@ cmd_trust_host() {
 
 usage() {
     cat >&2 <<USAGE
-usage: $PROG [check|accept|report [--finding]|test-alert|trust-host]
+usage: $PROG [check|status|report [--finding]|accept|expect [30m]|test-alert|trust-host]
 
   check       collect from the devbox, diff against the baseline held here,
               alert on any change or on containment failing, and send the
               heartbeat only if the cycle completed clean and could alert
-  accept      record the devbox's current state as the baseline
+  status      the baseline, the last check, and any expected-changes window
+  accept      record the devbox's current state as the baseline, then check
+  expect      hold alerts for changes and for the devbox being unreachable,
+              then accept: 30m by default, or 2h, 90s. --cancel ends it
+              without accepting
   report      the last cycle's detail, which is deliberately not in the alert.
               --finding shows the most recent cycle that found something, which
               a later clean cycle would otherwise have overwritten
@@ -891,9 +1138,20 @@ usage: $PROG [check|accept|report [--finding]|test-alert|trust-host]
 USAGE
 }
 
+# One run at a time on the state directory. The loop, an operator's accept and
+# the check a window left waiting would otherwise each read and write the
+# baseline under the others.
+lock() {
+    install -d -m 0750 "$STATE_DIR"
+    exec 9>"$STATE_DIR/lock"
+    flock -w 300 9 || die "another $PROG run has held the lock for five minutes"
+}
+
 case "${1:-check}" in
-    check)      cmd_check ;;
-    accept)     cmd_accept ;;
+    check)      lock; cmd_check ;;
+    accept)     lock; cmd_accept ;;
+    expect)     shift; lock; cmd_expect "$@" ;;
+    status)     cmd_status ;;
     report)     shift; cmd_report "$@" ;;
     test-alert) cmd_test_alert ;;
     trust-host) shift; cmd_trust_host "$@" ;;

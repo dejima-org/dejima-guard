@@ -69,6 +69,15 @@ ssh_known_hosts = /var/lib/dejima-guard/known_hosts
 # critical_paths = /usr/local/sbin/dejima-devbox-audit
 #                  /etc/sudoers.d/dejima-guard
 
+# Paths whose change is reported but not alerted on, space-separated, each
+# matched as a substring of the path. None by default.
+#
+# ~/.ssh/known_hosts is the usual one: it changes whenever the devbox first
+# connects to an SSH host, such as cloning from a new git server. Ignored
+# changes still appear in `dejima-guard report`, and a critical path above is
+# never ignored, whatever this says.
+# ignore_paths = /.ssh/known_hosts
+
 # Seconds to wait for the connection. A devbox that is slow is not a devbox
 # that is gone, and this is the line between those two readings.
 ssh_timeout = 10
@@ -144,3 +153,11 @@ heartbeat_url = https://kuma.example.invalid/api/push/abcdef?status=up&msg=OK&pi
 # Set it and ntfy_url is ignored.
 #
 # alert_command = /usr/local/bin/my-alerter
+
+# ===========================================================================
+# THIS MACHINE
+# ===========================================================================
+
+# This machine's name, so an alert can say where to run `dejima-guard report`.
+# Optional. Never guessed: inside a container the hostname is a container ID.
+# guard_name = nas

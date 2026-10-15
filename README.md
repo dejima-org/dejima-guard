@@ -236,6 +236,7 @@ other end of the connection, not the machine the guard runs on.
 | `ssh_known_hosts` | Where the devbox's host key is remembered. Must persist: in a container, on the state volume. Populated by `dejima-guard trust-host`, never automatically |
 | `ssh_timeout` | Seconds to wait. The line between a slow devbox and a gone one |
 | `critical_paths` | Paths whose change is its own max-priority alert, one per line. Defaults to the audit binary, the forced command, the sudoers rule, `sshd_config` and `authorized_keys` |
+| `ignore_paths` | Paths whose change is reported but never alerted on, space-separated substrings. None by default. See [Changes not worth waking for](#changes-not-worth-waking-for) |
 
 **Where alerts go.**
 
@@ -245,6 +246,7 @@ other end of the connection, not the machine the guard runs on.
 | `ntfy_token` | Write access to that topic and nothing else. The reason the config file is `0640` |
 | `heartbeat_url` | GET after a cycle that completed clean. An Uptime Kuma push monitor. **A credential**: the token is in the path, so it belongs in the config file rather than the environment |
 | `alert_command` | An alternative to ntfy: gets the title and body on stdin |
+| `guard_name` | This machine's name, for alerts to say where to run `dejima-guard report`. Optional; inside a container the hostname is a container ID, so it is never guessed |
 
 `etc/config.example` carries the same reference with the reasoning attached.
 
@@ -406,25 +408,62 @@ minutes to notice the monitoring and scrub, and the resulting gap is evidence.
   fails, so a broken channel surfaces as a dead guard rather than as silence:
   and `test-alert` exists so you can settle it deliberately rather than find
   out.
-- **It sends no detail.** Alert bodies carry counts and categories, never a
-  filename or a unit name. A compromised devbox controls those strings, and
-  interpolating one into a push hands it a channel to your phone. The detail is
-  in `dejima-guard report`, on this machine.
+- **It sends no paths.** Alert bodies say what kind of change and under which
+  watched area ("1 file(s) modified in ~/.ssh/known_hosts"), worded by the
+  guard from a fixed list, never a filename or a unit name. A compromised devbox
+  controls those strings, and interpolating one into a push hands it a channel
+  to your phone. The paths are in `dejima-guard report`, on this machine.
 
 ## Use
 
 ```sh
 dejima-guard check       # what the timer runs
-dejima-guard report      # the last cycle's detail
-dejima-guard accept      # record the devbox's current state as the baseline
+dejima-guard status      # baseline, last check, any expected-changes window
+dejima-guard report      # the last cycle's detail: each path added, modified or removed
+dejima-guard accept      # record the devbox's current state as the baseline, then check
+dejima-guard expect 30m  # updating the devbox: hold alerts, then accept at the end
 dejima-guard test-alert  # publish a test alert, then go and look
 dejima-guard trust-host  # record the devbox's host key; run once, before check
 
 dejima-guard-install-key # put the guard's key on a devbox, restricted
 ```
 
-`accept` is a decision, which is why a check never makes it. After an `apt
-upgrade` on the devbox, read the report, and if the changes are yours, accept.
+`accept` is a decision, which is why a check never makes it. After an
+unannounced change, read the report, and if the changes are yours, accept. The
+check it runs afterwards gets the heartbeat going again.
+
+### Updating the devbox without being paged
+
+Say so first, on the guard:
+
+```sh
+dejima-guard expect 30m   # or 2h, 90s; 24h at most
+```
+
+Until then, changes and the devbox being unreachable (a reboot) are held
+rather than sent. When the window ends the guard accepts the devbox's state and
+sends a low-priority note saying what it accepted; `report --finding` has the
+paths. Finished early? `dejima-guard accept`. Called it off? `dejima-guard
+expect --cancel`.
+
+**Critical paths and containment still alert**, and a window never accepts a
+critical path: those need an `accept` by hand. **It is opened on the guard and
+only there.** A devbox that could announce its own changes could silence its
+own guard.
+
+### Changes not worth waking for
+
+`ignore_paths` in the config, space-separated, each matched as a substring of
+the path like `critical_paths`:
+
+```
+ignore_paths = /.ssh/known_hosts
+```
+
+`~/.ssh/known_hosts` is the usual candidate. It changes whenever the devbox
+first connects to an SSH host, such as cloning from a new git server. Ignored
+changes still show in `report`, under their own heading, and a critical path
+cannot be ignored.
 
 ### In a container, every one of those needs a prefix
 
@@ -454,15 +493,18 @@ Either works; `exec` is cheaper and is what to reach for once the thing is up.
 the guard, so `run --rm dejima-guard accept` is the whole of it. Naming the
 binary again passes it as an argument to itself.
 
-If the prefix gets tiresome, this belongs in your profile, pointed at wherever
-your compose file lives:
+**Or skip the prefix.** `bin/dejima-guard-docker` runs the guard in its
+container by name, from any directory. Install it on the container host as
+`dejima-guard` and every command above works as written:
 
 ```sh
-dejima-guard() {
-  docker compose -f /srv/dejima-guard/docker-compose.yml \
-    exec -T dejima-guard dejima-guard "$@"
-}
+sudo install -m 0755 bin/dejima-guard-docker /usr/local/bin/dejima-guard
+dejima-guard status
 ```
+
+It assumes the `container_name` the example compose file sets; set
+`DEJIMA_GUARD_CONTAINER` if yours differs. Do not install it beside a host
+install of the guard, which would be a second deployment with its own baseline.
 
 ## Tests
 
