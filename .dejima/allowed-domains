@@ -1,0 +1,6 @@
+# Domains this repository's CI jobs need.
+#
+# One name per line. Adding one here widens what every job on the runner that
+# serves this repository can reach, so keep it to what the workflow actually
+# fetches.
+deb.debian.org
