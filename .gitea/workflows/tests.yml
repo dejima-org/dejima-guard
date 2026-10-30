@@ -1,0 +1,118 @@
+# Runs the bats suite on every pull request and on every push to one.
+# `pull_request` defaults to opened, reopened and synchronize, and
+# synchronize is the push-to-an-open-PR event, so both are covered without
+# listing types.
+#
+# Two jobs, split by what a red one tells you: `tests` checks the branch,
+# `runner-env` checks the machine it was handed. Each says why at its own
+# definition.
+name: tests
+
+# `pull_request`, so the workflow is read from the head of the pull request
+# and a change to this file is tested by the pull request that makes it.
+#
+# Not `pull_request_target`. Reading the workflow from the base branch does
+# not stop a branch choosing what runs, because the base is whichever branch
+# the pull request names - see
+# https://gitbox.branderson.io/dejima/dejima/issues/384.
+#
+# So this file is not a boundary. A branch decides what runs here and on which
+# label. What decides what that can reach is which runners the repository can
+# reach at all.
+on:
+  pull_request:
+
+# No `concurrency:` block. Gitea does not implement one - so writing it here
+# would only claim a cancellation that never happens.
+
+jobs:
+  tests:
+    # The CONFINED tier. Everything here is bats over shell scripts with ssh
+    # and curl stubbed, so nothing needs a Docker socket or the host's network
+    # namespace, and asking for a runner that grants both would be taking a
+    # privilege for no reason.
+    #
+    # The confined tier resolves only what .dejima/allowed-domains permits,
+    # which is deb.debian.org, which is where bats comes from. If a future test
+    # needs something else, declare it there rather than move this job to a
+    # runner that grants everything.
+    #
+    # If no runner carries this label, this job queues. That is the intended
+    # failure, and a better one than a green run on a host that grants more
+    # than the job asked for.
+    runs-on: dejima-confined
+    container:
+      # Debian bookworm plus a node binary - node is what actions/checkout
+      # needs to run at all. It also carries git, which the snippets test
+      # lists the docs with, and ssh-keygen, which install-key.bats uses.
+      image: node:20-bookworm
+    steps:
+      # Before apt, because apt's failure for this says "Unable to locate
+      # package bats" and nothing about why. Retried, because a resolver can
+      # be a moment behind a container's start.
+      - name: Check this host can resolve before installing anything
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            if getent hosts deb.debian.org >/dev/null 2>&1; then
+              [ "$attempt" -eq 1 ] || echo "resolved on attempt $attempt"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "deb.debian.org did not resolve after 6 attempts, so this job" >&2
+          echo "cannot install anything." >&2
+          echo "" >&2
+          echo "This job's resolver:" >&2
+          sed -n 's/^nameserver/  nameserver/p' /etc/resolv.conf >&2
+          echo "" >&2
+          echo "This is the confined tier, so check in this order:" >&2
+          echo "" >&2
+          echo "1. .dejima/allowed-domains in THIS repository, on main." >&2
+          echo "   The runner reads it from main, not from this branch, so a" >&2
+          echo "   domain added on the branch under test is not yet in force." >&2
+          echo "" >&2
+          echo "2. On the runner host:" >&2
+          echo "     sudo dejima-ci-allowlist show   - what is actually served" >&2
+          echo "     cat /etc/resolv.conf            - the VM's own resolver" >&2
+          exit 1
+
+      - name: Install test dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends bats ca-certificates
+
+      - uses: actions/checkout@v4
+
+      # As an ordinary user, not root. Four tests make the key unreadable with
+      # chmod 000 and assert the guard says so, and as root the file is still
+      # readable: `[ -r ]` is access(2) with R_OK, which always succeeds for a
+      # process holding CAP_DAC_OVERRIDE. `node` is uid 1000 in this image and
+      # needs to own the checkout, which actions/checkout leaves owned by root.
+      - run: |
+          chown -R node:node .
+          su node -c "bats test/"
+
+  runner-env:
+    # Asserts on the RUNNER rather than on the change, which is why it is a
+    # separate job: a red `runner-env` should say "the machine is wrong", and a
+    # red `tests` should say "the branch is wrong".
+    #
+    # Same label as the job above, deliberately. The point is to check that
+    # the runner this repository asked for is the one it got. `runs-on:` is a
+    # request, and nothing in a job's log says whether the Docker socket was
+    # mounted into it.
+    runs-on: dejima-confined
+    container:
+      image: node:20-bookworm
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: |
+          apt-get update
+          apt-get install -y --no-install-recommends bats python3 ca-certificates
+
+      - run: bats test/runner-env.bats
+        env:
+          # Declared, not detected. Landing on the wrong runner should fail
+          # rather than quietly select a different set of assertions.
+          DEJIMA_CI_TIER: confined
