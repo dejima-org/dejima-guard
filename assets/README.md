@@ -13,7 +13,7 @@ between the two by the reader's theme.
 Who holds them, and what may be done with them, is stated once for the whole
 organisation:
 
-https://gitbox.branderson.io/dejima/dejima/src/branch/main/ATTRIBUTION.md
+https://github.com/dejima-org/dejima/blob/main/ATTRIBUTION.md
 
 The link is absolute so that a fork resolves it to the canonical terms rather
 than to its own copy.

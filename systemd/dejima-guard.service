@@ -1,6 +1,6 @@
 [Unit]
 Description=Collect from the devbox and alert on what changed
-Documentation=https://gitbox.branderson.io/dejima/dejima-guard
+Documentation=https://github.com/dejima-org/dejima-guard
 After=network-online.target
 Wants=network-online.target
 
